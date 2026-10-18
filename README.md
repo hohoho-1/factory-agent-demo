@@ -126,7 +126,13 @@ py -3.12 -m venv .venv
 powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1
 ```
 
-백엔드 → AI 에이전트 → 센서 → 대시보드가 각각 창으로 뜹니다. 브라우저에서 **http://localhost:5173** 을 엽니다.
+백엔드 → AI 에이전트 → 센서 → 대시보드가 각각 창으로 뜹니다 (작업 표시줄에 최소화, 화면에 띄우려면 `-Visible`). 브라우저에서 **http://localhost:5173** 을 엽니다.
+
+백엔드를 IntelliJ에서 직접 실행하며 개발할 때는 나머지만 띄웁니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -SkipBackend
+```
 
 ### 3. 이상 주입
 

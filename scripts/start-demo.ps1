@@ -4,10 +4,13 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1            # windows start minimized
 #   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -Visible   # windows start normal
 #   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -Build     # always rebuild backend
+#   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -SkipBackend
+#       # backend is already running elsewhere (e.g. IntelliJ); start only agent, sensors, dashboard
 # Prerequisites: see README (Mosquitto service, PostgreSQL DB, python venv, application-local.yml)
 param(
     [switch]$Build,
     [switch]$Visible,
+    [switch]$SkipBackend,
     [string]$Mvn = "C:\Program Files\JetBrains\IntelliJ IDEA 2025.3.3\plugins\maven\lib\maven3\bin\mvn.cmd"
 )
 $ErrorActionPreference = "Stop"
@@ -25,7 +28,7 @@ if ((Get-Service mosquitto -ErrorAction SilentlyContinue).Status -ne "Running") 
 if (-not (Test-Path $py)) {
     throw "Python venv not found at $py. See README > Setup."
 }
-if ($Build -or -not (Test-Path $jar)) {
+if (-not $SkipBackend -and ($Build -or -not (Test-Path $jar))) {
     Write-Host "Building backend..."
     & $Mvn -q -f (Join-Path $root "backend\pom.xml") -DskipTests package
     if ($LASTEXITCODE -ne 0) { throw "Backend build failed" }
@@ -43,7 +46,9 @@ function Start-Window([string]$Title, [string]$WorkDir, [string]$Command) {
         -ArgumentList "-NoExit", "-EncodedCommand", $encoded | Out-Null
 }
 
-Start-Window "demo: backend" $root "java -jar '$jar'"
+if (-not $SkipBackend) {
+    Start-Window "demo: backend" $root "java -jar '$jar'"
+}
 
 Write-Host -NoNewline "Waiting for backend"
 $ready = $false
@@ -58,7 +63,10 @@ for ($i = 0; $i -lt 60; $i++) {
     }
 }
 Write-Host ""
-if (-not $ready) { throw "Backend did not start in 60s. Check the 'demo: backend' window." }
+if (-not $ready) {
+    if ($SkipBackend) { throw "Backend is not responding on :8080. Start BackendApplication first (IntelliJ Services)." }
+    throw "Backend did not start in 60s. Check the 'demo: backend' window."
+}
 
 Start-Window "demo: ai-agent" (Join-Path $root "python") "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m agent.agent"
 Start-Window "demo: sensors" $root "& '$py' python\sensors\virtual_sensors.py"
