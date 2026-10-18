@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 backend/target/
 backend/src/main/resources/application-local.yml
+dashboard/node_modules/
+dashboard/dist/
+*.tsbuildinfo

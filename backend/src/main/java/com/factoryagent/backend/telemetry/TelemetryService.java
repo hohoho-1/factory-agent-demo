@@ -5,9 +5,11 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -16,16 +18,19 @@ import java.util.Map;
 public class TelemetryService {
 
     private static final Logger log = LoggerFactory.getLogger(TelemetryService.class);
+    private static final int MAX_HISTORY_MINUTES = 60;
 
     private final ObjectMapper objectMapper;
     private final SensorReadingRepository repository;
     private final AlarmService alarmService;
+    private final ApplicationEventPublisher events;
 
     public TelemetryService(ObjectMapper objectMapper, SensorReadingRepository repository,
-                            AlarmService alarmService) {
+                            AlarmService alarmService, ApplicationEventPublisher events) {
         this.objectMapper = objectMapper;
         this.repository = repository;
         this.alarmService = alarmService;
+        this.events = events;
     }
 
     /** MQTT payload(JSON) 1건을 지표별 행으로 펼쳐 저장하고 이상 여부를 판정한다. 형식이 잘못된 메시지는 버린다. */
@@ -54,11 +59,20 @@ public class TelemetryService {
                 .toList();
         repository.saveAll(rows);
         rows.forEach(alarmService::evaluate);
+        events.publishEvent(new ReadingsSavedEvent(rows));
         log.debug("saved {} readings from {}", rows.size(), msg.equipmentId());
     }
 
     @Transactional(readOnly = true)
     public List<SensorReading> latest() {
         return repository.findLatestPerMetric();
+    }
+
+    /** 최근 N분 측정값 (대시보드 차트 초기 로딩용, 최대 60분). */
+    @Transactional(readOnly = true)
+    public List<SensorReading> history(int minutes) {
+        int clamped = Math.max(1, Math.min(minutes, MAX_HISTORY_MINUTES));
+        return repository.findByMeasuredAtAfterOrderByMeasuredAtAsc(
+                Instant.now().minus(Duration.ofMinutes(clamped)));
     }
 }

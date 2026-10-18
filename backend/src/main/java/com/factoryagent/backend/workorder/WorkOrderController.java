@@ -4,6 +4,7 @@ import com.factoryagent.backend.alarm.Alarm;
 import com.factoryagent.backend.alarm.AlarmService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -22,10 +23,13 @@ public class WorkOrderController {
 
     private final AlarmService alarmService;
     private final WorkOrderRepository repository;
+    private final ApplicationEventPublisher events;
 
-    public WorkOrderController(AlarmService alarmService, WorkOrderRepository repository) {
+    public WorkOrderController(AlarmService alarmService, WorkOrderRepository repository,
+                               ApplicationEventPublisher events) {
         this.alarmService = alarmService;
         this.repository = repository;
+        this.events = events;
     }
 
     /** AI 에이전트가 작성한 조치 지시서를 저장한다. */
@@ -40,6 +44,7 @@ public class WorkOrderController {
         }
         WorkOrder saved = repository.save(WorkOrder.of(alarm.get(), req));
         log.info("[WORK ORDER] #{} for alarm #{} ({}): {}", saved.getId(), alarmId, saved.getGenerator(), saved.getTitle());
+        events.publishEvent(new WorkOrderCreatedEvent(saved));
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 

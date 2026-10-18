@@ -2,6 +2,7 @@ package com.factoryagent.backend.telemetry;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -20,5 +21,11 @@ public class TelemetryController {
     @GetMapping("/latest")
     public List<SensorReading> latest() {
         return telemetryService.latest();
+    }
+
+    /** 최근 N분 측정값 (기본 5분). */
+    @GetMapping("/history")
+    public List<SensorReading> history(@RequestParam(defaultValue = "5") int minutes) {
+        return telemetryService.history(minutes);
     }
 }
