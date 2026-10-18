@@ -11,7 +11,7 @@ const GENERATOR_LABEL: Record<string, string> = { template: '매뉴얼 템플릿
 
 export function WorkOrderPanel({ workOrders, onOpen }: Props) {
   return (
-    <section className="card panel">
+    <section className="card panel panel--grow">
       <header className="panel__head">
         <h2>AI 조치 지시서</h2>
         <span className="count">{workOrders.length}</span>
@@ -20,7 +20,7 @@ export function WorkOrderPanel({ workOrders, onOpen }: Props) {
         <p className="empty muted">아직 작성된 지시서가 없습니다. 알람이 발생하면 에이전트가 매뉴얼을 검색해 작성합니다.</p>
       ) : (
         <ul className="wo-list">
-          {workOrders.slice(0, 12).map((wo) => (
+          {workOrders.map((wo) => (
             <li key={wo.id}>
               <button className="wo" onClick={() => onOpen(wo)}>
                 <div className="wo__top">

@@ -103,15 +103,18 @@ export default function App() {
             />
           ))}
         </div>
+        {/* 오른쪽 열은 높이를 설비 카드 영역에 맞추고, 넘치는 지시서 목록은 패널 안에서 스크롤한다 */}
         <aside className="side">
-          <AlarmPanel
-            alarms={live.alarms}
-            workOrders={live.workOrders}
-            series={live.series}
-            now={now}
-            onOpenWorkOrder={setOpenWo}
-          />
-          <WorkOrderPanel workOrders={live.workOrders} onOpen={setOpenWo} />
+          <div className="side__inner">
+            <AlarmPanel
+              alarms={live.alarms}
+              workOrders={live.workOrders}
+              series={live.series}
+              now={now}
+              onOpenWorkOrder={setOpenWo}
+            />
+            <WorkOrderPanel workOrders={live.workOrders} onOpen={setOpenWo} />
+          </div>
         </aside>
         <div className="full">
           <AlarmTable alarms={live.alarms} now={now} />
