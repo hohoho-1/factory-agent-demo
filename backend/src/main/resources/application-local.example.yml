@@ -1,0 +1,5 @@
+# 이 파일을 application-local.yml 로 복사하고 값을 채운다 (application-local.yml 은 .gitignore 대상).
+# 환경변수 DB_PASSWORD 로 대신 지정해도 된다.
+spring:
+  datasource:
+    password: change-me

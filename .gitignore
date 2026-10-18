@@ -1,0 +1,7 @@
+.idea/
+*.iml
+python/.venv/
+__pycache__/
+*.pyc
+backend/target/
+backend/src/main/resources/application-local.yml
