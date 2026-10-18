@@ -74,7 +74,10 @@ public class LiveStreamHub {
             try {
                 emitter.send(SseEmitter.event().name(name).data(data, MediaType.APPLICATION_JSON));
             } catch (IOException | IllegalStateException ex) {
-                emitters.remove(emitter);
+                // 브라우저가 떠난 연결. 이후 Spring 이 넘기는 오류는 StreamDisconnectHandler 가 정리한다
+                if (emitters.remove(emitter)) {
+                    log.info("dashboard disconnected (clients={})", emitters.size());
+                }
             }
         }
     }

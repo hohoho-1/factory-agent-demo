@@ -42,3 +42,8 @@ app:
 logging:
   level:
     com.factoryagent: INFO
+  # 콘솔과 함께 파일에도 남긴다 (실행 위치 기준 logs/backend.log, 10MB 단위로 순환)
+  file:
+    name: ${LOG_DIR:logs}/backend.log
+  charset:
+    file: UTF-8

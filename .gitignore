@@ -9,3 +9,4 @@ dashboard/node_modules/
 dashboard/dist/
 *.tsbuildinfo
 notes/
+logs/
