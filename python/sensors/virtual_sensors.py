@@ -7,9 +7,13 @@ KMPC 스타일 미니 라인 가상 센서 시뮬레이터.
 
 정상 구간은 목표값 주변 랜덤워크로 움직이고, --anomaly 옵션이나
 --anomaly-rate 확률로 이상 시나리오(과열, 진동 급증 등)를 주입한다.
+
+실행 중에도 MQTT 로 시나리오를 주입할 수 있다 (데모용):
+  mosquitto_pub -t factory/line1/sim/anomaly -m mixer_vibration
 """
 import argparse
 import json
+import queue
 import random
 import signal
 import sys
@@ -20,6 +24,7 @@ from datetime import datetime, timezone
 import paho.mqtt.client as mqtt
 
 TOPIC_PREFIX = "factory/line1"
+CONTROL_TOPIC = f"{TOPIC_PREFIX}/sim/anomaly"
 
 
 @dataclass
@@ -94,12 +99,13 @@ class AnomalyInjector:
 
     def start(self, name):
         if self.active:
+            print(f"[ANOMALY] skip {name}: {self.active[0]} is still running", flush=True)
             return
         eq_id, metric_name, drift, ticks = SCENARIOS[name]
         metric = self.by_id[eq_id].metrics[metric_name]
         metric.drift = drift
         self.active = (name, metric, ticks)
-        print(f"[ANOMALY] start {name}: {eq_id}.{metric_name} drift={drift}/tick x{ticks}")
+        print(f"[ANOMALY] start {name}: {eq_id}.{metric_name} drift={drift}/tick x{ticks}", flush=True)
 
     def tick(self):
         if not self.active:
@@ -108,7 +114,7 @@ class AnomalyInjector:
         if left <= 1:
             metric.drift = 0.0  # 이후 목표값으로 서서히 복귀
             self.active = None
-            print(f"[ANOMALY] end {name}")
+            print(f"[ANOMALY] end {name}", flush=True)
         else:
             self.active = (name, metric, left - 1)
 
@@ -130,10 +136,28 @@ def main():
     line = build_line()
     injector = AnomalyInjector(line)
 
+    # MQTT 콜백 스레드 → 메인 루프로 시나리오 이름을 넘긴다
+    requested = queue.SimpleQueue()
+
+    def on_connect(client, userdata, flags, reason_code, properties):
+        client.subscribe(CONTROL_TOPIC, qos=1)
+
+    def on_message(client, userdata, msg):
+        name = msg.payload.decode("utf-8").strip()
+        if name == "random":
+            name = random.choice(list(SCENARIOS))
+        if name in SCENARIOS:
+            requested.put(name)
+        else:
+            print(f"[ANOMALY] unknown scenario '{name}', choose one of {list(SCENARIOS)}", flush=True)
+
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="virtual-sensors")
+    client.on_connect = on_connect
+    client.on_message = on_message
     client.connect(args.host, args.port, keepalive=30)
     client.loop_start()
-    print(f"connected to mqtt://{args.host}:{args.port}, publishing every {args.interval}s")
+    print(f"connected to mqtt://{args.host}:{args.port}, publishing every {args.interval}s"
+          f" (inject: {CONTROL_TOPIC})", flush=True)
 
     running = True
 
@@ -148,6 +172,8 @@ def main():
 
     tick = 0
     while running and (args.count == 0 or tick < args.count):
+        while not requested.empty():
+            injector.start(requested.get())
         if args.anomaly_rate and not injector.active and random.random() < args.anomaly_rate:
             injector.start(random.choice(list(SCENARIOS)))
 
