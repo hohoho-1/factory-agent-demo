@@ -23,6 +23,13 @@ class WorkOrderTest {
     }
 
     @Test
+    void requestSeverityWinsOverAlarmThatEscalatedMeanwhile() {
+        WorkOrder w = WorkOrder.of(alarm, new WorkOrderRequest("t", "s", "b", "llm", java.util.List.of(),
+                java.util.List.of(), Severity.WARNING));
+        assertThat(w.getSeverity()).isEqualTo(Severity.WARNING);
+    }
+
+    @Test
     void acknowledgeOnlyOnce() {
         WorkOrder w = workOrder(10, alarm);
         assertThat(w.acknowledge("kim", Instant.now())).isTrue();

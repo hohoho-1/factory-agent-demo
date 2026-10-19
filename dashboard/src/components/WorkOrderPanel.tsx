@@ -8,7 +8,7 @@ interface Props {
   onOpen: (wo: WorkOrder) => void
 }
 
-const GENERATOR_LABEL: Record<string, string> = { template: '매뉴얼 템플릿', llm: 'LLM' }
+const GENERATOR_LABEL: Record<string, string> = { template: '매뉴얼 템플릿', llm: 'Claude (LLM)' }
 
 const STATUS_LABEL: Record<WorkOrderStatus, string> = {
   OPEN: '미확인',

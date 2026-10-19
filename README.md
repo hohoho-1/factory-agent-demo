@@ -69,7 +69,7 @@ flowchart LR
 
 | 영역 | 사용 기술 |
 |---|---|
-| 가상 센서 · AI 에이전트 | Python 3.12, paho-mqtt, scikit-learn (TF-IDF) |
+| 가상 센서 · AI 에이전트 | Python 3.12, paho-mqtt, scikit-learn (TF-IDF), Anthropic SDK (Claude, 선택) |
 | 메시징 | Eclipse Mosquitto (MQTT 3.1.1) |
 | 백엔드 | Java 17, Spring Boot 3.5, Spring Integration MQTT, Spring Data JPA |
 | DB | PostgreSQL 18 (지시서 근거 문서는 `jsonb`), Flyway 마이그레이션 |
@@ -84,7 +84,8 @@ factory-agent-demo/
 │   └── agent/
 │       ├── agent.py                 # 알람 구독 → 지시서 작성 → 백엔드 저장
 │       ├── rag.py                   # 매뉴얼 청킹 · TF-IDF 검색
-│       ├── work_order.py            # 템플릿 지시서 생성기 (LLM 교체 가능)
+│       ├── work_order.py            # 템플릿 지시서 생성기 (키가 없거나 LLM 실패 시)
+│       ├── llm.py                   # Claude 지시서 생성기 (근거 번호 인용 · 검증)
 │       └── manuals/*.md             # 가상 설비 매뉴얼 7종
 ├── backend/                         # Spring Boot
 │   └── src/main/java/com/factoryagent/backend/
@@ -126,6 +127,8 @@ cd python
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
+
+**Claude 지시서 (선택)** — `python/.env.example`을 `python/.env`로 복사하고 `ANTHROPIC_API_KEY=`에 Claude API 키를 넣습니다. 이 파일은 git에 올라가지 않습니다. 키가 없으면 매뉴얼 템플릿 지시서로 동작합니다. 모델 · 노력 수준은 같은 파일의 `ANTHROPIC_MODEL` · `ANTHROPIC_EFFORT`로 바꿀 수 있습니다 (기본 `claude-opus-5-5` · `medium`).
 
 ### 2. 한 번에 실행
 
@@ -219,11 +222,12 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 - **설명 가능한 RAG** — 매뉴얼을 섹션 단위로 쪼개 문자 n-gram TF-IDF로 검색하고, 설비 유형·지표가 맞으면 가점을 줍니다. 지시서마다 근거 섹션과 점수를 남겨 "왜 이 조치인가"를 추적할 수 있습니다. 한국어 형태소 분석이나 모델 다운로드 없이 동작합니다.
 - **사람이 최종 판단** — 에이전트는 설비를 직접 조작하지 않고 지시서만 작성합니다. 작업자가 지시서를 확인하고 조치 결과를 남기는 단계를 화면에 두었습니다.
 - **현장 경험이 쌓이는 구조** — 작업자가 입력한 원인 · 조치 · 결과가 다음 지시서의 근거가 됩니다. 매뉴얼에는 없는 "이 설비는 보통 이게 원인이었다"는 현장 지식이 매뉴얼 절차 옆에 붙습니다. 지금은 같은 설비 · 지표로 찾고, 이력이 많아지면 증상 유사도로 검색하는 방향으로 넓힐 수 있습니다.
-- **LLM 교체 지점** — `work_order.py`의 생성기는 `generate(alarm, index)` 인터페이스 하나입니다. 지금은 매뉴얼 섹션을 조립하는 템플릿 생성기이고, LLM 생성기를 같은 인터페이스로 추가하면 검색 결과를 근거로 문장을 다듬을 수 있습니다.
+- **근거를 강제한 LLM** — 키가 있으면 Claude가 지시서 문장을 씁니다. 검색은 그대로 TF-IDF가 하고, Claude에는 매뉴얼 구절(S1, S2…)과 과거 조치(H1…)에 번호를 붙여 보냅니다. 응답은 JSON 스키마로 고정하고 모든 항목에 근거 번호를 달게 한 뒤, 근거가 없거나 목록에 없는 번호를 쓰면 그 지시서를 버리고 템플릿으로 씁니다. 지시서에는 항목마다 *(근거: 점검 절차)* 처럼 출처가 붙습니다.
+- **LLM이 없어도 동작** — 생성기는 `generate(alarm, index, history)` 인터페이스 하나입니다. 키가 없거나, 크레딧 · 네트워크 오류가 나거나, 근거 검증에 실패하면 매뉴얼 템플릿 생성기가 같은 형식으로 씁니다. 데모는 오프라인에서도 끝까지 돕니다.
 
 ## 다음 단계
 
-- [ ] LLM 생성기 추가 (검색 근거를 인용하는 형태로, 템플릿은 폴백으로 유지)
+- [x] LLM 생성기 추가 (검색 근거를 인용하는 형태로, 템플릿은 폴백으로 유지)
 - [ ] 임베딩 검색 + pgvector로 전환, 매뉴얼 버전 관리
 - [x] 작업자 지시서 확인 · 조치 결과 입력 → 다음 지시서에 과거 유사 조치 이력 반영
 - [x] 조치 이력 요약 (설비 · 지표별 이상 횟수 · 해결률 · 평균 처리 시간 · 주요 원인)

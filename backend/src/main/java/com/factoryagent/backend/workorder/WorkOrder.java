@@ -114,7 +114,7 @@ public class WorkOrder {
         w.equipmentId = alarm.getEquipmentId();
         w.equipmentType = alarm.getEquipmentType();
         w.metric = alarm.getMetric();
-        w.severity = alarm.getSeverity();
+        w.severity = req.severity() != null ? req.severity() : alarm.getSeverity();
         w.title = req.title();
         w.summary = req.summary();
         w.body = req.body();

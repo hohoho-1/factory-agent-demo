@@ -23,7 +23,7 @@ final class WorkOrderFixtures {
 
     static WorkOrder workOrder(long id, Alarm alarm) {
         WorkOrder w = WorkOrder.of(alarm,
-                new WorkOrderRequest("title", "summary", "body", "template", List.of(), List.of("원인 A", "원인 B")));
+                new WorkOrderRequest("title", "summary", "body", "template", List.of(), List.of("원인 A", "원인 B"), null));
         ReflectionTestUtils.setField(w, "id", id);
         return w;
     }

@@ -1,6 +1,7 @@
 .idea/
 *.iml
 python/.venv/
+python/.env
 __pycache__/
 *.pyc
 backend/target/
