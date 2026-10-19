@@ -41,7 +41,9 @@ function saveWorker(worker: string) {
  * 입력한 원인·조치·결과는 같은 설비·지표에 다음 알람이 나면 AI 지시서의 '과거 유사 조치 이력'에 들어간다.
  */
 export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) {
-  const [worker, setWorker] = useState(loadWorker)
+  // 마지막으로 저장된 작업자 이름: 이 값에서 바뀌었으면 저장 안 된 입력으로 본다
+  const [initialWorker, setInitialWorker] = useState(loadWorker)
+  const [worker, setWorker] = useState(initialWorker)
   const [rootCause, setRootCause] = useState('')
   const [actionTaken, setActionTaken] = useState('')
   const [outcome, setOutcome] = useState<ActionOutcome>('RESOLVED')
@@ -49,15 +51,18 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
   const [error, setError] = useState<string | null>(null)
 
   const closed = workOrder.status === 'COMPLETED' || workOrder.status === 'SUPERSEDED'
-  const dirty = !closed && (rootCause.trim() !== '' || actionTaken.trim() !== '')
+  const dirty =
+    !closed && (worker.trim() !== initialWorker.trim() || rootCause.trim() !== '' || actionTaken.trim() !== '')
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
 
   const send = async (path: string, body: unknown) => {
     setBusy(true)
     setError(null)
     try {
+      const updated = await postJson<WorkOrder>(path, body)
       saveWorker(worker.trim())
-      onUpdated(await postJson<WorkOrder>(path, body))
+      setInitialWorker(worker)
+      onUpdated(updated)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
