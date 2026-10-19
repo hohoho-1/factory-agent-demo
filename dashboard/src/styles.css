@@ -672,6 +672,11 @@ p {
   border-color: color-mix(in srgb, var(--link) 40%, transparent);
 }
 
+.chip--superseded {
+  color: var(--muted);
+  border-style: dashed;
+}
+
 .chip--completed {
   color: var(--text-primary);
   background: color-mix(in srgb, var(--status-good) 14%, transparent);
@@ -704,6 +709,22 @@ p {
 .action h2 {
   margin: 0 0 10px;
   font-size: 15px;
+}
+
+.action--superseded {
+  background: transparent;
+  border-style: dashed;
+}
+
+.modal__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.modal__actions .link-button {
+  margin-top: 6px;
 }
 
 .action--done {

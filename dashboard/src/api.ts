@@ -56,9 +56,11 @@ export interface WorkOrder {
   actionTaken: string | null
   outcome: ActionOutcome | null
   completedAt: string | null
+  supersededBy: number | null
 }
 
-export type WorkOrderStatus = 'OPEN' | 'ACKNOWLEDGED' | 'COMPLETED'
+/** SUPERSEDED: 같은 알람의 다른 지시서가 조치 완료되어 함께 닫힘 */
+export type WorkOrderStatus = 'OPEN' | 'ACKNOWLEDGED' | 'COMPLETED' | 'SUPERSEDED'
 export type ActionOutcome = 'RESOLVED' | 'PARTIAL' | 'UNRESOLVED'
 
 export interface ActionResult {

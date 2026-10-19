@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -86,7 +87,11 @@ public class WorkOrderController {
         return ResponseEntity.ok(wo);
     }
 
-    /** 조치 완료와 결과 입력. 조치 내용과 결과는 필수. */
+    /**
+     * 조치 완료와 결과 입력. 조치 내용과 결과는 필수.
+     * 같은 알람의 아직 열린 지시서(경고 단계 지시서 등)는 SUPERSEDED 로 함께 닫는다.
+     */
+    @Transactional
     @PostMapping("/api/work-orders/{id}/complete")
     public ResponseEntity<WorkOrder> complete(@PathVariable Long id, @RequestBody ActionResultRequest req) {
         if (req.outcome() == null || req.actionTaken() == null || req.actionTaken().isBlank()) {
@@ -97,14 +102,23 @@ public class WorkOrderController {
             return ResponseEntity.notFound().build();
         }
         WorkOrder wo = found.get();
-        if (wo.getStatus() == WorkOrderStatus.COMPLETED) {
+        if (wo.getStatus().isClosed()) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(wo);
         }
+        Instant now = Instant.now();
         String cause = req.rootCause() == null || req.rootCause().isBlank() ? null : req.rootCause().trim();
-        wo.complete(workerOrDefault(req.worker()), cause, req.actionTaken().trim(), req.outcome(), Instant.now());
+        wo.complete(workerOrDefault(req.worker()), cause, req.actionTaken().trim(), req.outcome(), now);
         wo = repository.save(wo);
         log.info("[WORK ORDER] #{} completed by {} ({}): {}", id, wo.getWorker(), wo.getOutcome(), wo.getActionTaken());
         events.publishEvent(new WorkOrderUpdatedEvent(wo));
+
+        for (WorkOrder sibling : repository.findByAlarmIdOrderByCreatedAtDesc(wo.getAlarmId())) {
+            if (!sibling.getId().equals(id) && sibling.supersede(id, now)) {
+                repository.save(sibling);
+                log.info("[WORK ORDER] #{} superseded by #{}", sibling.getId(), id);
+                events.publishEvent(new WorkOrderUpdatedEvent(sibling));
+            }
+        }
         return ResponseEntity.ok(wo);
     }
 

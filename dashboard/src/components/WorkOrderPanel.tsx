@@ -10,7 +10,12 @@ interface Props {
 
 const GENERATOR_LABEL: Record<string, string> = { template: '매뉴얼 템플릿', llm: 'LLM' }
 
-const STATUS_LABEL: Record<WorkOrderStatus, string> = { OPEN: '미확인', ACKNOWLEDGED: '조치 중', COMPLETED: '완료' }
+const STATUS_LABEL: Record<WorkOrderStatus, string> = {
+  OPEN: '미확인',
+  ACKNOWLEDGED: '조치 중',
+  COMPLETED: '완료',
+  SUPERSEDED: '함께 처리',
+}
 
 function statusText(wo: WorkOrder): string {
   if (wo.status === 'COMPLETED' && wo.outcome) return `완료 · ${OUTCOME_LABEL[wo.outcome]}`

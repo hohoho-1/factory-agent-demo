@@ -66,10 +66,10 @@ public class WorkOrder {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
-    // ---- 작업자 피드백 (컬럼 추가 전에 만든 행은 null 이라 nullable 로 두고 status 는 OPEN 으로 읽는다) ----
+    // ---- 작업자 피드백 ----
 
     @Enumerated(EnumType.STRING)
-    @Column(length = 16)
+    @Column(nullable = false, length = 16)
     private WorkOrderStatus status;
 
     @Column(length = 64)
@@ -91,6 +91,10 @@ public class WorkOrder {
 
     @Column(name = "completed_at")
     private Instant completedAt;
+
+    /** SUPERSEDED 일 때, 대신 조치 완료된 같은 알람의 지시서 id. */
+    @Column(name = "superseded_by")
+    private Long supersededBy;
 
     protected WorkOrder() {
     }
@@ -135,6 +139,17 @@ public class WorkOrder {
         this.completedAt = at;
     }
 
+    /** 같은 알람의 다른 지시서가 조치 완료되어 함께 닫는다. 이미 닫힌 지시서는 그대로 둔다. */
+    public boolean supersede(Long completedWorkOrderId, Instant at) {
+        if (status.isClosed()) {
+            return false;
+        }
+        this.status = WorkOrderStatus.SUPERSEDED;
+        this.supersededBy = completedWorkOrderId;
+        this.completedAt = at;
+        return true;
+    }
+
     public Long getId() { return id; }
     public Long getAlarmId() { return alarmId; }
     public String getEquipmentId() { return equipmentId; }
@@ -146,11 +161,12 @@ public class WorkOrder {
     public List<ReferenceDoc> getReferences() { return references; }
     public String getGenerator() { return generator; }
     public Instant getCreatedAt() { return createdAt; }
-    public WorkOrderStatus getStatus() { return status == null ? WorkOrderStatus.OPEN : status; }
+    public WorkOrderStatus getStatus() { return status; }
     public String getWorker() { return worker; }
     public Instant getAcknowledgedAt() { return acknowledgedAt; }
     public String getRootCause() { return rootCause; }
     public String getActionTaken() { return actionTaken; }
     public ActionOutcome getOutcome() { return outcome; }
     public Instant getCompletedAt() { return completedAt; }
+    public Long getSupersededBy() { return supersededBy; }
 }

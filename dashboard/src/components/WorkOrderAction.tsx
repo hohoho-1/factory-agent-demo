@@ -1,11 +1,16 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { postJson, type ActionOutcome, type ActionResult, type WorkOrder } from '../api'
 import { formatTime } from '../format'
 
 interface Props {
   workOrder: WorkOrder
   onUpdated: (wo: WorkOrder) => void
+  /** 저장하지 않은 입력이 있는지 알린다 (모달이 닫기 전에 확인하도록) */
+  onDirtyChange: (dirty: boolean) => void
 }
+
+/** 모달 머리의 바로가기 버튼이 스크롤해 올 위치 */
+export const ACTION_SECTION_ID = 'wo-action'
 
 export const OUTCOME_LABEL: Record<ActionOutcome, string> = {
   RESOLVED: '해결',
@@ -35,13 +40,17 @@ function saveWorker(worker: string) {
  * 작업자 피드백: 지시서 확인 → 조치 완료·결과 입력.
  * 입력한 원인·조치·결과는 같은 설비·지표에 다음 알람이 나면 AI 지시서의 '과거 유사 조치 이력'에 들어간다.
  */
-export function WorkOrderAction({ workOrder, onUpdated }: Props) {
+export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) {
   const [worker, setWorker] = useState(loadWorker)
   const [rootCause, setRootCause] = useState('')
   const [actionTaken, setActionTaken] = useState('')
   const [outcome, setOutcome] = useState<ActionOutcome>('RESOLVED')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const closed = workOrder.status === 'COMPLETED' || workOrder.status === 'SUPERSEDED'
+  const dirty = !closed && (rootCause.trim() !== '' || actionTaken.trim() !== '')
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
 
   const send = async (path: string, body: unknown) => {
     setBusy(true)
@@ -64,9 +73,22 @@ export function WorkOrderAction({ workOrder, onUpdated }: Props) {
     void send(`/api/work-orders/${workOrder.id}/complete`, result)
   }
 
+  if (workOrder.status === 'SUPERSEDED') {
+    return (
+      <section id={ACTION_SECTION_ID} className="action action--superseded">
+        <h2>함께 처리됨</h2>
+        <p className="muted">
+          같은 알람의 WO-{workOrder.supersededBy} 조치가 완료되어 이 지시서도 닫혔습니다
+          {workOrder.completedAt && ` (${formatTime(workOrder.completedAt)})`}. 조치 결과는 WO-{workOrder.supersededBy}
+          에서 볼 수 있습니다.
+        </p>
+      </section>
+    )
+  }
+
   if (workOrder.status === 'COMPLETED') {
     return (
-      <section className="action action--done">
+      <section id={ACTION_SECTION_ID} className="action action--done">
         <h2>조치 결과</h2>
         <dl className="action__result">
           <dt>결과</dt>
@@ -90,7 +112,7 @@ export function WorkOrderAction({ workOrder, onUpdated }: Props) {
   }
 
   return (
-    <section className="action">
+    <section id={ACTION_SECTION_ID} className="action">
       <h2>작업자 조치</h2>
       <label className="field">
         <span>작업자</span>

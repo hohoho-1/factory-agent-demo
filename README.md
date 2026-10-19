@@ -57,7 +57,7 @@ flowchart LR
 4. **알람 발행** — DB 커밋이 끝난 뒤 `factory/line1/alarms`로 알람 이벤트를 발행한다.
 5. **AI 에이전트** — 알람을 받아 "배합기 진동 상승 베어링 …" 질의로 매뉴얼을 검색하고, 가장 관련 높은 매뉴얼에서 원인·점검 절차·심각도별 조치·안전·에스컬레이션을 골라 지시서를 만든다.
 6. **저장 · 표시** — 지시서를 백엔드에 저장하면 대시보드에 SSE로 바로 나타난다. 근거가 된 매뉴얼 구절과 검색 점수도 함께 남는다.
-7. **작업자 피드백** — 작업자가 대시보드에서 지시서를 **확인**하고, 점검이 끝나면 확인한 원인 · 조치 내용 · 결과(해결/부분 해결/미해결)를 입력한다.
+7. **작업자 피드백** — 작업자가 대시보드에서 지시서를 **확인**하고, 점검이 끝나면 확인한 원인 · 조치 내용 · 결과(해결/부분 해결/미해결)를 입력한다. 한 알람에서 경고 · 위험 지시서가 따로 나왔어도 하나만 완료하면 나머지는 "함께 처리"로 닫힌다.
 8. **다음 지시서에 반영** — 같은 설비 · 지표에 다시 이상이 생기면 에이전트가 완료된 조치 기록을 조회해 지시서 앞쪽에 **과거 유사 조치 이력**을 넣는다. 지난번에 해결된 원인은 "우선 확인"으로 강조한다.
 9. **조치 이력 요약** — 대시보드 하단 표에 설비 · 지표별 이상 횟수, 해결률, 평균 처리 시간, 작업자가 입력한 주요 원인이 쌓인다. 기록이 늘수록 반복 고장 설비와 원인이 드러난다.
 
@@ -72,7 +72,7 @@ flowchart LR
 | 가상 센서 · AI 에이전트 | Python 3.12, paho-mqtt, scikit-learn (TF-IDF) |
 | 메시징 | Eclipse Mosquitto (MQTT 3.1.1) |
 | 백엔드 | Java 17, Spring Boot 3.5, Spring Integration MQTT, Spring Data JPA |
-| DB | PostgreSQL 18 (지시서 근거 문서는 `jsonb`) |
+| DB | PostgreSQL 18 (지시서 근거 문서는 `jsonb`), Flyway 마이그레이션 |
 | 대시보드 | React 18, TypeScript, Vite, Recharts, SSE(EventSource) |
 
 ## 폴더 구조
@@ -114,6 +114,8 @@ Java 17, PostgreSQL, Node.js 20 이상도 필요합니다. 백엔드 빌드는 I
 ```powershell
 psql -h localhost -U postgres -v db_password=<비밀번호> -f backend/db/init.sql
 ```
+
+테이블은 백엔드가 처음 뜰 때 Flyway가 만듭니다 (`backend/src/main/resources/db/migration`). Flyway 도입 전에 만든 DB는 V1을 기준선으로 등록하고 V2부터 적용합니다.
 
 **DB 비밀번호 설정** — `backend/src/main/resources/application-local.example.yml`을 `application-local.yml`로 복사하고 위 비밀번호를 넣습니다. 이 파일은 git에 올라가지 않습니다. 환경변수 `DB_PASSWORD`로 지정해도 됩니다.
 
@@ -174,6 +176,13 @@ cd dashboard; npm install; npm run dev                        # 대시보드 :51
 ```powershell
 .venv\Scripts\python -m agent.agent --search "배합기 진동이 계속 올라가요"
 .venv\Scripts\python -m agent.agent --alarm-id 3 --dry-run    # 저장하지 않고 지시서 미리보기
+```
+
+### 테스트
+
+```powershell
+mvn -f backend\pom.xml test                                   # 임계값 · 지시서 상태 전이 · 함께 닫기 · 통계 집계
+cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼 검색 · 과거 이력 섹션
 ```
 
 ## MQTT 토픽
