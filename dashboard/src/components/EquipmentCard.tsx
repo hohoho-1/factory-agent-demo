@@ -3,6 +3,7 @@ import { displayUnit, METRIC_LABEL, type EquipmentInfo } from '../equipment'
 import { formatValue } from '../format'
 import { seriesKey, type SeriesMap } from '../useLiveData'
 import { MetricChart } from './MetricChart'
+import { withUnit } from './SetpointCard'
 import { StatusBadge, worstStatus, type Status } from './StatusBadge'
 
 interface Props {
@@ -39,6 +40,28 @@ export function EquipmentCard({ equipment, series, units, rules, activeAlarms, f
         </div>
         <StatusBadge status={cardStatus} />
       </header>
+
+      {equipment.setpoints?.map((sp) => {
+        const last = (metric: string) => {
+          const points = series[seriesKey(equipment.id, metric)] ?? []
+          const p = points[points.length - 1]
+          // 30초 넘게 안 들어온 값은 쓰지 않는다 (가상 센서 모드로 바꿨거나 게이트웨이가 끊김)
+          return p && now - p.t < 30_000 ? p.v : undefined
+        }
+        const value = last(sp.tag)
+        if (value === undefined) return null // 가상 센서 모드: PLC 설정값 없음
+        const unit = units[seriesKey(equipment.id, sp.tag)] ?? null
+        const pv = sp.pv ? last(sp.pv) : undefined
+        return (
+          <div className="sp-row" key={sp.tag} title="PLC 설정값(SP) — AI 제안을 승인하면 바뀝니다">
+            <span className="sp-row__label">SP {sp.label}</span>
+            <b>{withUnit(value, unit)}</b>
+            {pv !== undefined && Math.abs(pv - value) >= 0.05 && (
+              <span className="muted">실제 {withUnit(pv, unit)} (따라가는 중)</span>
+            )}
+          </div>
+        )
+      })}
 
       {equipment.metrics.map((metric) => {
         const key = seriesKey(equipment.id, metric)

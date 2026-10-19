@@ -1,9 +1,11 @@
-# Stops everything started by start-demo.ps1 (backend, AI agent, simulator, dashboard).
+# Stops everything started by start-demo.ps1 (backend, AI agent, simulator or virtual PLC + gateway, dashboard).
 # Mosquitto and PostgreSQL services keep running.
 $patterns = @(
     "*backend-0.0.1-SNAPSHOT.jar*",
     "*agent.agent*",
     "*virtual_sensors.py*",
+    "*plc.virtual_plc*",
+    "*plc.edge_gateway*",
     "*factory-agent-demo*dashboard*vite*"
 )
 $stopped = 0

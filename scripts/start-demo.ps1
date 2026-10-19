@@ -6,11 +6,15 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -Build     # always rebuild backend
 #   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -SkipBackend
 #       # backend is already running elsewhere (e.g. IntelliJ); start only agent, sensors, dashboard
+#   powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -OpcUa
+#       # instead of the sensor simulator, start the virtual PLC (OPC UA server, port 4840)
+#       # and the edge gateway (OPC UA -> MQTT telemetry, MQTT commands -> OPC UA setpoint writes)
 # Prerequisites: see README (Mosquitto service, PostgreSQL DB, python venv, application-local.yml)
 param(
     [switch]$Build,
     [switch]$Visible,
     [switch]$SkipBackend,
+    [switch]$OpcUa,
     [string]$Mvn = "C:\Program Files\JetBrains\IntelliJ IDEA 2025.3.3\plugins\maven\lib\maven3\bin\mvn.cmd"
 )
 $ErrorActionPreference = "Stop"
@@ -69,7 +73,13 @@ if (-not $ready) {
 }
 
 Start-Window "demo: ai-agent" (Join-Path $root "python") "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m agent.agent"
-Start-Window "demo: sensors" $root "& '$py' python\sensors\virtual_sensors.py"
+if ($OpcUa) {
+    $pyDir = Join-Path $root "python"
+    Start-Window "demo: virtual-plc" $pyDir "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m plc.virtual_plc"
+    Start-Window "demo: edge-gateway" $pyDir "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m plc.edge_gateway"
+} else {
+    Start-Window "demo: sensors" $root "& '$py' python\sensors\virtual_sensors.py"
+}
 # Run vite with node directly: "npm run" overwrites the window title,
 # and the absolute path lets stop-demo.ps1 find the process.
 Start-Window "demo: dashboard" $dashboard "node '$vite'"
@@ -77,5 +87,9 @@ Start-Window "demo: dashboard" $dashboard "node '$vite'"
 Write-Host ""
 Write-Host "Dashboard      : http://localhost:5173"
 Write-Host "Inject anomaly : powershell -File scripts\inject.ps1 mixer_vibration"
+if ($OpcUa) {
+    Write-Host "Data source    : virtual PLC opc.tcp://localhost:4840/factory/line1/ -> edge gateway -> MQTT"
+    Write-Host "Setpoint demo  : powershell -File scripts\inject.ps1 mixer_resonance  (then approve the AI setpoint card)"
+}
 Write-Host "Stop everything: powershell -File scripts\stop-demo.ps1"
 if (-not $Visible) { Write-Host "Logs           : demo windows are minimized in the taskbar ('demo: ...')" }

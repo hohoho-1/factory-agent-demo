@@ -129,6 +129,38 @@ export interface HandoverReport {
   completedAt: string | null
 }
 
+/**
+ * 설정값 변경 (승인형 제어). AI 가 지시서와 함께 제안하고, 작업자가 승인하면 게이트웨이가 PLC 에 쓴다.
+ * INTERLOCKED: PLC 인터록이 거부 / EXTERNAL: 백엔드 승인 없이 게이트웨이로 직접 들어온 명령의 결과
+ */
+export type SetpointStatus = 'PROPOSED' | 'REJECTED' | 'SENT' | 'APPLIED' | 'INTERLOCKED' | 'FAILED'
+
+export interface SetpointChange {
+  id: number
+  origin: 'AI' | 'EXTERNAL'
+  workOrderId: number | null
+  alarmId: number | null
+  equipmentId: string
+  tag: string
+  label: string | null
+  unit: string | null
+  currentValue: number | null
+  proposedValue: number
+  reason: string | null
+  sources: string | null
+  generator: string | null
+  status: SetpointStatus
+  createdAt: string
+  decidedBy: string | null
+  decidedAt: string | null
+  decisionNote: string | null
+  valueBefore: number | null
+  valueAfter: number | null
+  resultCode: string | null
+  resultMessage: string | null
+  completedAt: string | null
+}
+
 export interface ActionStats {
   equipmentId: string
   metric: string
@@ -159,7 +191,12 @@ export interface AlarmEventMessage {
 export async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path)
   if (!res.ok) {
-    throw new Error(`${path} → HTTP ${res.status}`)
+    // 백엔드가 {"message"} 로 사유를 주면 그대로 보여 준다 (예: 설정값 승인 거부 사유)
+    const detail = await res
+      .json()
+      .then((b: { message?: string }) => b?.message)
+      .catch(() => undefined)
+    throw new Error(detail ?? `${path} → HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
 }
@@ -171,7 +208,12 @@ export async function postJson<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   })
   if (!res.ok) {
-    throw new Error(`${path} → HTTP ${res.status}`)
+    // 백엔드가 {"message"} 로 사유를 주면 그대로 보여 준다 (예: 설정값 승인 거부 사유)
+    const detail = await res
+      .json()
+      .then((b: { message?: string }) => b?.message)
+      .catch(() => undefined)
+    throw new Error(detail ?? `${path} → HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
 }

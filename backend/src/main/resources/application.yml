@@ -32,6 +32,16 @@ app:
     alarm-topic: factory/line1/alarms
     handover-topic: factory/line1/handover/requests
     assistant-topic: factory/line1/assistant/requests
+    command-topic: factory/line1/commands                # 승인된 설정값 → 엣지 게이트웨이
+    command-result-topic: factory/line1/commands/results # 게이트웨이 → 반영 / 인터록 거부 결과
+  # 원격으로 바꿀 수 있는 설정값(PLC SP 태그)과 운전 범위. AI 제안과 작업자 승인 때 검사한다.
+  # PLC 안의 인터록(하드 리밋)은 이보다 넓고 따로 있다 (python/plc/process.py).
+  control:
+    command-timeout: 15s   # 승인 후 이 시간 안에 설비 응답이 없으면 실패
+    freshness: 30s         # 현재값(최신 측정값)이 이보다 오래되면 게이트웨이가 끊긴 것으로 본다
+    setpoints:
+      - { equipment-id: MIXER-01, tag: speed_sp, label: 교반 회전수 설정값, unit: rpm, min: 40, max: 66, max-step: 15, nominal: 60 }
+      - { equipment-id: TANK-02, tag: temp_sp, label: 온도 설정값, unit: C, min: 30, max: 45, max-step: 20, nominal: 40 }
   # 설비 유형 → 지표 → 임계값 (warn/crit × high/low, 필요한 것만)
   # 정상 운전값: 탱크 레벨 65~70%, 온도 25~40C / 배합기 진동 2.5mm/s, 전류 12A / 충진기 120bpm
   alarm:

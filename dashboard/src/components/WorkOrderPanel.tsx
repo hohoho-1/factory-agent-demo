@@ -1,10 +1,26 @@
-import type { WorkOrder, WorkOrderStatus } from '../api'
+import type { SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
 import { formatTime } from '../format'
+import { SETPOINT_STATUS_LABEL, withUnit } from './SetpointCard'
 import { StatusBadge } from './StatusBadge'
+
+function SetpointLine({ change }: { change: SetpointChange }) {
+  return (
+    <div className="wo__setpoint">
+      <span className={`chip setpoint-chip setpoint-chip--${change.status.toLowerCase()}`}>
+        {SETPOINT_STATUS_LABEL[change.status]}
+      </span>
+      <span>
+        {change.label ?? change.tag} {withUnit(change.valueBefore ?? change.currentValue, change.unit)} →{' '}
+        {withUnit(change.proposedValue, change.unit)}
+      </span>
+    </div>
+  )
+}
 import { OUTCOME_LABEL } from './WorkOrderAction'
 
 interface Props {
   workOrders: WorkOrder[]
+  setpointChanges: SetpointChange[]
   onOpen: (wo: WorkOrder) => void
 }
 
@@ -22,7 +38,13 @@ function statusText(wo: WorkOrder): string {
   return STATUS_LABEL[wo.status]
 }
 
-export function WorkOrderPanel({ workOrders, onOpen }: Props) {
+export function WorkOrderPanel({ workOrders, setpointChanges, onOpen }: Props) {
+  // 지시서마다 가장 최근 설정값 제안 (목록에 '승인 대기' 등을 표시)
+  const proposalOf = new Map<number, SetpointChange>()
+  for (const c of setpointChanges) {
+    if (c.workOrderId !== null && !proposalOf.has(c.workOrderId)) proposalOf.set(c.workOrderId, c)
+  }
+
   return (
     <section className="card panel panel--grow">
       <header className="panel__head">
@@ -42,6 +64,7 @@ export function WorkOrderPanel({ workOrders, onOpen }: Props) {
                   <span className={`chip chip--${wo.status.toLowerCase()}`}>{statusText(wo)}</span>
                 </div>
                 {wo.summary && <p className="wo__summary">{wo.summary}</p>}
+                {proposalOf.has(wo.id) && <SetpointLine change={proposalOf.get(wo.id)!} />}
                 <div className="wo__meta muted">
                   WO-{wo.id} · 알람 #{wo.alarmId} · {formatTime(wo.createdAt)} ·{' '}
                   {GENERATOR_LABEL[wo.generator] ?? wo.generator}

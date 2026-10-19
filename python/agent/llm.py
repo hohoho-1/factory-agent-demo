@@ -17,6 +17,7 @@ import re
 import sys
 from dataclasses import dataclass
 
+from . import setpoint
 from .rag import Hit, Manual, ManualIndex
 from .work_order import (
     EQUIPMENT_KO, METRIC_KO, TemplateGenerator, _fmt, _reference, build_query, cause_options, history_section,
@@ -38,6 +39,9 @@ SYSTEM_PROMPT = """\
 - 과거 조치 기록에 '해결'된 원인이 있으면 그 원인을 추정 원인 맨 앞에 두고, situation 에서 먼저 확인하라고 말합니다. 같은 유형의 다른 설비 기록은 참고로만 다룹니다.
 - 즉시 조치는 현재 심각도에 맞는 매뉴얼 조치를 따릅니다. 안전 주의사항(잠금·표지 등)은 빠뜨리지 않으며, 안전장치를 우회하라는 지시는 절대 쓰지 않습니다.
 - 문장은 짧은 명령형으로 씁니다 ("~한다", "~확인한다"). situation 은 2~3문장, summary 는 한 문장입니다.
+- setpoint_changes 는 '조정 가능한 설정값' 목록에 있는 태그만, 현재 심각도의 매뉴얼 조치에 설정값(회전수·온도 설정 등) 조정 근거가
+  있을 때만 최대 1건 제안합니다. 운전 범위와 한 번 최대 변경폭을 지키고, proposed_value 는 숫자 하나입니다. reason 에는 왜 그 값인지
+  한두 문장으로 씁니다. 근거가 없거나 정지·잠금이 필요한 상황이면 빈 배열로 둡니다. 이 제안은 작업자가 승인해야 설비에 반영됩니다.
 """
 
 _ITEM = {
@@ -69,8 +73,23 @@ OUTPUT_SCHEMA = {
         "immediate_actions": {"type": "array", "items": _ITEM},
         "safety": {"type": "array", "items": _ITEM},
         "escalation": {"type": "array", "items": _ITEM},
+        "setpoint_changes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tag": {"type": "string"},
+                    "proposed_value": {"type": "number"},
+                    "reason": {"type": "string"},
+                    "sources": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["tag", "proposed_value", "reason", "sources"],
+                "additionalProperties": False,
+            },
+        },
     },
-    "required": ["summary", "situation", "causes", "inspection_steps", "immediate_actions", "safety", "escalation"],
+    "required": ["summary", "situation", "causes", "inspection_steps", "immediate_actions", "safety", "escalation",
+                 "setpoint_changes"],
     "additionalProperties": False,
 }
 
@@ -117,7 +136,8 @@ def collect_sources(manual: Manual, index: ManualIndex, hits: list[Hit], history
     return sources
 
 
-def build_user_prompt(alarm: dict, manual: Manual, sources: list[Source], options: list[str]) -> str:
+def build_user_prompt(alarm: dict, manual: Manual, sources: list[Source], options: list[str],
+                      setpoints: list[dict] | None = None) -> str:
     unit = alarm.get("unit") or ""
     op = ">=" if alarm["direction"] == "HIGH" else "<="
     facts = "\n".join([
@@ -130,8 +150,8 @@ def build_user_prompt(alarm: dict, manual: Manual, sources: list[Source], option
     ])
     source_text = "\n\n".join(f"<{s.id}>\n{s.text}\n</{s.id}>" for s in sources)
     option_text = "\n".join(f"- {o}" for o in options) or "- (없음)"
-    return (f"알람\n{facts}\n\n원인 선택지\n{option_text}\n\n근거\n{source_text}\n\n"
-            f"위 알람에 대한 조치 지시서를 JSON 으로 작성하세요.")
+    return (f"알람\n{facts}\n\n원인 선택지\n{option_text}\n\n{setpoint.prompt_section(setpoints or [])}\n\n"
+            f"근거\n{source_text}\n\n위 알람에 대한 조치 지시서를 JSON 으로 작성하세요.")
 
 
 def validate(data: dict, sources: list[Source]) -> None:
@@ -213,7 +233,8 @@ class LlmGenerator:
         self.model = model or os.environ.get("ANTHROPIC_MODEL", DEFAULT_MODEL)
         self.effort = effort or os.environ.get("ANTHROPIC_EFFORT", DEFAULT_EFFORT)
 
-    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None) -> dict:
+    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None,
+                 setpoints: list[dict] | None = None) -> dict:
         history = history or []
         hits = index.search(build_query(alarm), alarm["equipmentType"], alarm["metric"], k=6)
         manual = index.best_manual(hits)
@@ -222,8 +243,18 @@ class LlmGenerator:
 
         options = cause_options(manual.sections.get("가능 원인", ""))
         sources = collect_sources(manual, index, hits, history)
-        data = self._call(build_user_prompt(alarm, manual, sources, options))
+        adjustable = setpoint.available(setpoints, alarm["equipmentId"])
+        data = self._call(build_user_prompt(alarm, manual, sources, options, adjustable))
         validate(data, sources)
+
+        # 설정값 제안은 지시서와 따로 검증한다: 실패하면 제안만 빼고 지시서는 그대로 낸다
+        labels = {s.id: s.label if s.id.startswith("H") or " · " in s.label else f"{manual.id} {s.label}"
+                  for s in sources}
+        try:
+            proposal = setpoint.from_llm(data.get("setpoint_changes") or [], adjustable, labels)
+        except setpoint.SetpointProposalError as e:
+            print(f"[AGENT] setpoint proposal dropped: {e}", file=sys.stderr)
+            proposal = None
 
         eq_ko = EQUIPMENT_KO.get(alarm["equipmentType"], alarm["equipmentType"])
         metric_ko = METRIC_KO.get(alarm["metric"], alarm["metric"])
@@ -235,6 +266,7 @@ class LlmGenerator:
             "generator": self.name,
             "references": [_reference(h) for h in hits],
             "causeOptions": options,
+            "setpointChange": proposal,
         }
 
     def _call(self, user_prompt: str) -> dict:
@@ -271,9 +303,10 @@ class FallbackGenerator:
         self.fallback = fallback or TemplateGenerator()
         self.name = primary.name
 
-    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None) -> dict:
+    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None,
+                 setpoints: list[dict] | None = None) -> dict:
         try:
-            return self.primary.generate(alarm, index, history)
+            return self.primary.generate(alarm, index, history, setpoints)
         except Exception as e:  # noqa: BLE001 - 어떤 실패든 지시서는 나가야 한다
             print(f"[AGENT] {self.primary.name} generator failed, using template: {e!r}", file=sys.stderr)
-            return self.fallback.generate(alarm, index, history)
+            return self.fallback.generate(alarm, index, history, setpoints)

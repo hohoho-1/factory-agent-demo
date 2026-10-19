@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import type { WorkOrder, WorkOrderStatus } from '../api'
+import type { SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
 import { formatTime } from '../format'
+import { SetpointCard } from './SetpointCard'
 import { StatusBadge } from './StatusBadge'
 import { ACTION_SECTION_ID, WorkOrderAction } from './WorkOrderAction'
 
@@ -14,11 +15,14 @@ const JUMP_LABEL: Record<WorkOrderStatus, string> = {
 
 interface Props {
   workOrder: WorkOrder
+  /** 이 지시서에 딸린 권장 설정값 변경 (없으면 빈 배열) */
+  setpointChanges: SetpointChange[]
   onUpdated: (wo: WorkOrder) => void
+  onSetpointUpdated: (change: SetpointChange) => void
   onClose: () => void
 }
 
-export function WorkOrderModal({ workOrder, onUpdated, onClose }: Props) {
+export function WorkOrderModal({ workOrder, setpointChanges, onUpdated, onSetpointUpdated, onClose }: Props) {
   // 조치 내용을 쓰다가 Esc·바깥 클릭으로 닫혀 입력이 사라지지 않게 한 번 묻는다
   const dirtyRef = useRef(false)
   const onDirtyChange = useCallback((dirty: boolean) => {
@@ -64,6 +68,9 @@ export function WorkOrderModal({ workOrder, onUpdated, onClose }: Props) {
           </div>
         </header>
         <div className="modal__body markdown">
+          {setpointChanges.map((c) => (
+            <SetpointCard key={c.id} change={c} onUpdated={onSetpointUpdated} />
+          ))}
           <ReactMarkdown>{body}</ReactMarkdown>
           <h2>근거 문서 (RAG 검색 결과)</h2>
           <table className="table">

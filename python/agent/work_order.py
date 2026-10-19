@@ -3,7 +3,8 @@
 
 TemplateGenerator 는 LLM 없이 매뉴얼 섹션을 골라 조립한다 (심각도에 맞는 조치 섹션 선택).
 같은 설비·지표에서 작업자가 조치를 마친 기록(history)이 있으면 '과거 유사 조치 이력'으로 앞쪽에 넣는다.
-LLM 을 붙일 때는 같은 generate(alarm, index, history) 인터페이스로 생성기만 추가하면 된다.
+LLM 을 붙일 때는 같은 generate(alarm, index, history, setpoints) 인터페이스로 생성기만 추가하면 된다.
+설비가 원격 설정값을 제공하면(setpoints) 매뉴얼 조치 문장에 맞는 권장 설정값 변경을 setpointChange 로 붙인다.
 """
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import re
 from datetime import datetime
 
 from .rag import Hit, ManualIndex
+from .setpoint import template_proposal
 
 EQUIPMENT_KO = {"RAW_TANK": "원료 탱크", "MIXER": "배합기", "FILLER": "충진기"}
 METRIC_KO = {"temperature": "온도", "level": "레벨", "vibration": "진동", "current": "전류", "speed": "속도"}
@@ -111,7 +113,8 @@ def history_section(history: list[dict], equipment_id: str | None = None) -> lis
 class TemplateGenerator:
     name = "template"
 
-    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None) -> dict:
+    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None,
+                 setpoints: list[dict] | None = None) -> dict:
         history = history or []
         query = build_query(alarm)
         hits = index.search(query, alarm["equipmentType"], alarm["metric"], k=6)
@@ -174,6 +177,7 @@ class TemplateGenerator:
             "generator": self.name,
             "references": [_reference(h) for h in hits],
             "causeOptions": cause_options(manual.sections.get("가능 원인", "")),
+            "setpointChange": template_proposal(alarm, manual, setpoints),
         }
 
 

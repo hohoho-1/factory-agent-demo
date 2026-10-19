@@ -20,7 +20,7 @@ export const OUTCOME_LABEL: Record<ActionOutcome, string> = {
 
 const WORKER_KEY = 'worker'
 
-function loadWorker(): string {
+export function loadWorker(): string {
   try {
     return localStorage.getItem(WORKER_KEY) ?? ''
   } catch {
@@ -28,7 +28,7 @@ function loadWorker(): string {
   }
 }
 
-function saveWorker(worker: string) {
+export function saveWorker(worker: string) {
   try {
     localStorage.setItem(WORKER_KEY, worker)
   } catch {

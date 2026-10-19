@@ -7,6 +7,7 @@ import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
 import { EquipmentCard } from './components/EquipmentCard'
 import { HandoverModal } from './components/HandoverModal'
+import { SetpointHistory } from './components/SetpointHistory'
 import { WorkOrderModal } from './components/WorkOrderModal'
 import { WorkOrderPanel } from './components/WorkOrderPanel'
 import { EQUIPMENT } from './equipment'
@@ -147,11 +148,14 @@ export default function App() {
               now={now}
               onOpenWorkOrder={setOpenWo}
             />
-            <WorkOrderPanel workOrders={live.workOrders} onOpen={setOpenWo} />
+            <WorkOrderPanel workOrders={live.workOrders} setpointChanges={live.setpointChanges} onOpen={setOpenWo} />
           </div>
         </aside>
         <div className="full">
           <ActionStatsTable refreshKey={statsKey} onPropose={requestProposal} />
+        </div>
+        <div className="full">
+          <SetpointHistory changes={live.setpointChanges} onOpenWorkOrder={setOpenWoId} />
         </div>
         <div className="full">
           <AlarmTable alarms={live.alarms} now={now} />
@@ -159,7 +163,13 @@ export default function App() {
       </main>
 
       {openWo && (
-        <WorkOrderModal workOrder={openWo} onUpdated={live.updateWorkOrder} onClose={() => setOpenWoId(null)} />
+        <WorkOrderModal
+          workOrder={openWo}
+          setpointChanges={live.setpointChanges.filter((c) => c.workOrderId === openWo.id)}
+          onUpdated={live.updateWorkOrder}
+          onSetpointUpdated={live.updateSetpoint}
+          onClose={() => setOpenWoId(null)}
+        />
       )}
       {assistantOpen && (
         <AssistantModal

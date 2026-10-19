@@ -5,8 +5,12 @@ import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface SensorReadingRepository extends JpaRepository<SensorReading, Long> {
+
+    /** 설비·지표 1개의 최신 측정값 (설정값 태그의 현재값 조회용). */
+    Optional<SensorReading> findFirstByEquipmentIdAndMetricOrderByMeasuredAtDesc(String equipmentId, String metric);
 
     List<SensorReading> findByMeasuredAtAfterOrderByMeasuredAtAsc(Instant since);
 

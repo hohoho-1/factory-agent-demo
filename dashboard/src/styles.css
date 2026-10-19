@@ -994,3 +994,159 @@ p {
   opacity: 0.5;
   cursor: default;
 }
+
+/* ---- 승인형 설정값 제어 ---- */
+.setpoint {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid color-mix(in srgb, var(--series-1) 45%, transparent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--series-1) 6%, transparent);
+}
+
+.setpoint--applied {
+  border-color: color-mix(in srgb, var(--status-good) 50%, transparent);
+  background: color-mix(in srgb, var(--status-good) 6%, transparent);
+}
+
+.setpoint--interlocked,
+.setpoint--failed {
+  border-color: color-mix(in srgb, var(--status-critical) 50%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 5%, transparent);
+}
+
+.setpoint--rejected {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border);
+}
+
+.setpoint__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.markdown .setpoint__head h2 {
+  margin: 0;
+  border: none;
+  padding: 0;
+  font-size: 15px;
+}
+
+.setpoint__change {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-top: 8px;
+}
+
+.setpoint__tag {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.setpoint__values {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+}
+
+.markdown .setpoint__reason,
+.markdown .setpoint__meta {
+  margin: 6px 0 0;
+}
+
+.setpoint__meta {
+  font-size: 12px;
+}
+
+.setpoint__decide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.setpoint__decide input {
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+  flex: 1 1 180px;
+}
+
+.markdown .setpoint__trail {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.setpoint__result--applied {
+  color: var(--status-good);
+  font-weight: 600;
+}
+
+.setpoint__result--interlocked,
+.setpoint__result--failed {
+  color: var(--status-critical);
+  font-weight: 600;
+}
+
+.setpoint-chip--proposed {
+  background: color-mix(in srgb, var(--series-1) 16%, transparent);
+  color: var(--link);
+}
+
+.setpoint-chip--sent {
+  background: color-mix(in srgb, var(--status-warning) 22%, transparent);
+}
+
+.setpoint-chip--applied {
+  background: color-mix(in srgb, var(--status-good) 18%, transparent);
+}
+
+.setpoint-chip--interlocked,
+.setpoint-chip--failed {
+  background: color-mix(in srgb, var(--status-critical) 18%, transparent);
+}
+
+.wo__setpoint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.sp-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: -4px 0 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--series-1) 6%, transparent);
+  font-size: 13px;
+}
+
+.sp-row__label {
+  color: var(--text-secondary);
+}
+
+.panel__note {
+  font-size: 12px;
+}
+
+.setpoint-history__result {
+  max-width: 360px;
+  font-size: 13px;
+}

@@ -24,7 +24,10 @@
 ```mermaid
 flowchart LR
     subgraph OT["OT · 현장 (가상)"]
-        S["가상 센서<br/>Python"]
+        S["가상 센서<br/>Python (기본)"]
+        PLC["가상 PLC<br/>OPC UA 서버 · 인터록<br/>(-OpcUa)"]
+        GW["엣지 게이트웨이<br/>OPC UA ↔ MQTT"]
+        PLC <-- "구독 · 설정값 쓰기" --> GW
     end
     B(("MQTT 브로커<br/>Mosquitto"))
     subgraph IT["IT · 백엔드"]
@@ -38,6 +41,8 @@ flowchart LR
     UI["React<br/>실시간 관제 대시보드"]
 
     S -- "factory/line1/{설비}/telemetry" --> B
+    GW -- "같은 telemetry 토픽 · 명령 결과" --> B
+    B -- "factory/line1/commands<br/>(승인된 설정값)" --> GW
     B --> SB
     SB <--> DB
     SB -- "factory/line1/alarms" --> B
@@ -45,9 +50,11 @@ flowchart LR
     M --> AG
     AG -- "POST /api/alarms/{id}/work-orders" --> SB
     SB -- "SSE /api/stream" --> UI
-    UI -- "작업자 확인 · 조치 결과" --> SB
+    UI -- "작업자 확인 · 조치 결과<br/>설정값 승인 · 거절" --> SB
     SB -. "과거 유사 조치 이력" .-> AG
 ```
+
+데이터 소스는 두 가지입니다. 기본은 **가상 센서**가 MQTT에 바로 발행하고, `-OpcUa`로 띄우면 **가상 PLC(OPC UA 서버) → 엣지 게이트웨이 → MQTT** 경로가 같은 토픽·형식으로 발행합니다. 백엔드는 어느 쪽인지 모릅니다. 설정값 승인(폐루프 제어)은 PLC 경로에서만 동작합니다.
 
 ### 이상 하나가 처리되는 흐름
 
@@ -64,6 +71,7 @@ flowchart LR
 11. **추세 기반 조기 경보** — 기준을 넘기 전에, 최근 40초 측정값의 기울기로 "약 N초 뒤 경고 기준 도달"을 예측해 ◆ 예측으로 알린다. 신호마다 평소 수준과 흔들림(σ)을 배워 두고, 평소에서 4σ 이상 · 기준까지 거리의 25% 이상 벗어난 직선 추세만 잡는다 (정상 노이즈 3시간 20분 시뮬레이션에서 오경보 0건). 실제 알람으로 이어지면 "발생 N초 전에 예측됨"이 알람 기록에 남는다. 데모는 `mixer_bearing_wear`(천천히 오르는 진동)로 20~30초 먼저 알린다.
 12. **AI에게 질문** — 상단 버튼에서 "배합기 진동 원인이 주로 뭐였어?" 같은 질문을 하면, 에이전트가 최근 7일 알람 · 조치 기록, 설비별 통계, 매뉴얼을 번호 붙여 Claude에 주고 근거 번호가 달린 답을 받는다. 재료로 답할 수 없는 질문은 "답할 수 없다"고 답한다.
 13. **매뉴얼 개선 제안** — 조치 이력 요약 표의 **매뉴얼 개선 제안**을 누르면, 그 설비 · 지표의 조치 기록을 매뉴얼과 비교해 개선안 초안을 쓴다. 모든 변경 제안은 현장 조치 기록 근거가 있어야 하고, 고칠 섹션은 실제 매뉴얼 섹션 중에서만 고른다. 사람이 검토해 반영하는 초안이다.
+14. **승인형 설정값 제어** (`-OpcUa`) — 매뉴얼의 현재 심각도 조치에 설정값 조정이 있으면(예: 배합기 경고 "교반 회전수를 10~20% 낮추고") 지시서에 **권장 설정값 변경**(태그, 현재값 → 제안값, 이유, 근거)이 붙는다. 작업자가 지시서 팝업에서 **승인 후 실행**을 누르면 백엔드가 운전 범위를 다시 검사하고 감사 기록(승인자, 전후 값, 시각)을 남긴 뒤 `factory/line1/commands`로 명령을 보낸다. 게이트웨이가 PLC 설정값 태그에 OPC UA로 쓰고, PLC 인터록이 받아들이면 공정이 반응한다(회전수 ↓ → 진동 ↓ → 알람 해제). 인터록이 거부하면 그 사유가 화면에 남는다.
 
 ![AI 조치 지시서](docs/images/work-order.png)
 
@@ -74,6 +82,7 @@ flowchart LR
 | 영역 | 사용 기술 |
 |---|---|
 | 가상 센서 · AI 에이전트 | Python 3.12, paho-mqtt, scikit-learn (TF-IDF), Anthropic SDK (Claude, 선택) |
+| 가상 PLC · 엣지 게이트웨이 | Python asyncua (OPC UA 서버 · 클라이언트, 구독 · 쓰기) |
 | 메시징 | Eclipse Mosquitto (MQTT 3.1.1) |
 | 백엔드 | Java 17, Spring Boot 3.5, Spring Integration MQTT, Spring Data JPA |
 | DB | PostgreSQL 18 (지시서 근거 문서는 `jsonb`), Flyway 마이그레이션 |
@@ -85,6 +94,11 @@ flowchart LR
 factory-agent-demo/
 ├── python/
 │   ├── sensors/virtual_sensors.py   # 가상 센서 + 이상 시나리오 주입
+│   ├── plc/
+│   │   ├── process.py               # 공정 모델(설정값 반영) + 인터록 (OPC UA 무관 순수 로직)
+│   │   ├── virtual_plc.py           # 가상 PLC: OPC UA 서버로 태그 노출, 설정값 쓰기 검사
+│   │   ├── edge_gateway.py          # OPC UA 구독 → MQTT 텔레메트리, MQTT 명령 → OPC UA 쓰기
+│   │   └── direct_write.py          # 승인 없이 게이트웨이에 직접 명령 (인터록 시연용)
 │   └── agent/
 │       ├── agent.py                 # 알람 구독 → 지시서 작성 → 백엔드 저장
 │       ├── rag.py                   # 매뉴얼 청킹 · TF-IDF 검색
@@ -92,6 +106,7 @@ factory-agent-demo/
 │       ├── llm.py                   # Claude 지시서 생성기 (근거 번호 인용 · 검증)
 │       ├── handover.py              # 교대 인수인계 리포트 (Claude · 템플릿)
 │       ├── assistant.py             # AI 질문 답변 · 매뉴얼 개선 제안 (Claude · 템플릿)
+│       ├── setpoint.py              # 권장 설정값 변경 (템플릿 규칙 · LLM 제안 검증)
 │       └── manuals/*.md             # 가상 설비 매뉴얼 7종
 ├── backend/                         # Spring Boot
 │   └── src/main/java/com/factoryagent/backend/
@@ -102,6 +117,7 @@ factory-agent-demo/
 │       ├── handover/                # 교대 인수인계 리포트 요청 · 재료 · 결과
 │       ├── forecast/                # 추세 기반 조기 경보 (회귀 · 평소 수준 학습)
 │       ├── assistant/               # AI 질문 · 매뉴얼 개선 제안 요청 · 재료 · 결과
+│       ├── control/                 # 설정값 변경 제안 · 승인 · 거절 · 감사 기록 · 명령 결과
 │       └── stream/                  # 대시보드용 SSE
 ├── dashboard/                       # React 관제 화면
 ├── scripts/                         # 데모 실행 · 이상 주입 · 종료
@@ -153,6 +169,32 @@ powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1
 powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -SkipBackend
 ```
 
+**OPC UA 모드** — 가상 센서 대신 가상 PLC(OPC UA 서버, `opc.tcp://localhost:4840/factory/line1/`)와 엣지 게이트웨이를 띄웁니다. 설정값 승인 데모는 이 모드에서 합니다. 다른 스위치와 함께 써도 됩니다 (`-OpcUa -Build`).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\start-demo.ps1 -OpcUa
+```
+
+UaExpert 같은 OPC UA 클라이언트로 `opc.tcp://localhost:4840/factory/line1/`에 붙으면 아래 태그를 직접 볼 수 있습니다 (보안 없음, 익명 · 데모 전용).
+
+| 태그 (NodeId, ns=2) | 역할 | 내용 |
+|---|---|---|
+| `Line1.{설비ID}.{지표}` 예) `Line1.MIXER-01.vibration` | PV · 읽기 | 측정값. 1초마다 PLC 스캔으로 갱신 |
+| `Line1.MIXER-01.speed` | PV · 읽기 | 실제 교반 회전수(rpm). 설정값을 초당 3rpm 씩 따라감 |
+| `Line1.MIXER-01.speed_sp` | SP · 쓰기 | 교반 회전수 설정값. 진동은 회전수 비율의 세제곱, 전류는 부하에 비례 |
+| `Line1.TANK-02.temp_sp` | SP · 쓰기 | 탱크 2 온도 설정값. 온도가 이 값으로 수렴 |
+| `Line1.{설비ID}.LastInterlock` | 읽기 | 마지막 인터록 거부 사유 |
+
+설비 객체에는 `EquipmentType`, 태그에는 `Unit` · `Role`(PV/SP) 속성이 있어 게이트웨이는 설정 파일 없이 주소 공간을 browse 해서 태그를 찾습니다.
+
+**설정값의 세 겹 안전장치**
+
+| 단계 | 어디서 | 무엇을 |
+|---|---|---|
+| 1. AI 제안 검증 | 에이전트 | 근거 번호 · 운전 범위 · 한 번 변경폭. 실패하면 제안 없이 지시서만 |
+| 2. 사람 승인 + 운전 범위 | 백엔드 (`app.control`) | 승인 시점의 현재값으로 다시 검사, 감사 기록. 교반 40~66rpm(1회 15), 탱크 2 온도 30~45°C(1회 20) |
+| 3. PLC 인터록 | 가상 PLC (`plc/process.py`) | AI · 백엔드와 독립된 마지막 장치. 하드 리밋(교반 30~72rpm, 온도 20~60°C, 1회 20) 밖은 `BadOutOfRange`, 진동 위험(≥7.1) 중 증속 · 온도 경고(≥50°C) 중 설정값 상향은 `BadInvalidState` |
+
 ### 3. 이상 주입
 
 ```powershell
@@ -167,7 +209,16 @@ powershell -File scripts\inject.ps1 mixer_vibration
 | `mixer_overcurrent` | 배합기 모터 과전류 | MAN-MIX-CUR-01 |
 | `filler_slowdown` | 충진기 속도 저하 | MAN-FIL-SPD-01 |
 | `mixer_bearing_wear` | 배합기 진동이 천천히 상승 (약 40초 뒤 경고, 추세 예측 데모용) | MAN-MIX-VIB-01 |
-| `random` | 위 중 하나 | |
+| `mixer_resonance` | 회전수 과다로 인한 공진: 약 15초 뒤 진동 경고(5.6mm/s)에서 10분간 유지. OPC UA 모드에서 회전수 설정값을 낮추면 해소 | MAN-MIX-VIB-01 |
+| `tank_sp_misentry` | TANK-02 온도 설정값을 55°C로 잘못 입력 → 약 10초 뒤 온도 경고. 설정값을 40°C로 되돌리면 해소 (OPC UA 모드 전용) | MAN-TANK-TEMP-01 |
+| `random` | 위 중 하나 (`tank_sp_misentry` 제외) | |
+
+**인터록 시연** (OPC UA 모드) — 백엔드 승인을 거치지 않고 게이트웨이에 직접 명령을 보냅니다. PLC가 거부하고, 대시보드 **설정값 변경 이력**에 "외부 명령 · PLC 인터록 거부"로 남습니다.
+
+```powershell
+powershell -File scripts\plc-write.ps1 MIXER-01 speed_sp 95     # 허용 범위 밖 → BadOutOfRange
+powershell -File scripts\plc-write.ps1 TANK-02 temp_sp 58       # tank_sp_misentry 로 온도 경고 중 상향 → BadInvalidState
+```
 
 ### 4. 종료
 
@@ -181,6 +232,8 @@ powershell -File scripts\stop-demo.ps1
 java -jar backend\target\backend-0.0.1-SNAPSHOT.jar          # 백엔드 :8080
 cd python; .venv\Scripts\python -m agent.agent                # AI 에이전트
 .venv\Scripts\python sensors\virtual_sensors.py               # 가상 센서
+.venv\Scripts\python -m plc.virtual_plc                       # 또는 가상 PLC (OPC UA :4840)
+.venv\Scripts\python -m plc.edge_gateway                      #      + 엣지 게이트웨이
 cd dashboard; npm install; npm run dev                        # 대시보드 :5173
 ```
 
@@ -194,15 +247,17 @@ cd dashboard; npm install; npm run dev                        # 대시보드 :51
 ### 테스트
 
 ```powershell
-mvn -f backend\pom.xml test                                   # 임계값 · 지시서 상태 전이 · 함께 닫기 · 통계 집계
-cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼 검색 · 과거 이력 섹션
+mvn -f backend\pom.xml test                                   # 임계값 · 지시서 상태 전이 · 통계 · 설정값 승인/결과/시간 초과
+cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼 검색 · LLM 검증 · 설정값 제안 · PLC 인터록 · OPC UA 왕복
 ```
 
 ## MQTT 토픽
 
 | 토픽 | 방향 | 내용 |
 |---|---|---|
-| `factory/line1/{설비ID}/telemetry` | 센서 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` |
+| `factory/line1/{설비ID}/telemetry` | 센서 또는 게이트웨이 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` (게이트웨이는 `speed` · `*_sp` 도 함께) |
+| `factory/line1/commands` | 백엔드 → 게이트웨이 | `{"requestId","equipmentId","tag","value","approvedBy"}` 승인된 설정값 |
+| `factory/line1/commands/results` | 게이트웨이 → 백엔드 | `{"requestId","status":"APPLIED"\|"INTERLOCKED"\|"FAILED","code","message","before","after"}` |
 | `factory/line1/alarms` | 백엔드 → 에이전트 | `{"event":"RAISED"\|"ESCALATED"\|"CLEARED","alarm":{...}}` |
 | `factory/line1/handover/requests` | 백엔드 → 에이전트 | `{"reportId","from","to"}` 인수인계 리포트 작성 요청 |
 | `factory/line1/assistant/requests` | 백엔드 → 에이전트 | `{"taskId","type"}` AI 질문 · 매뉴얼 개선 제안 작성 요청 |
@@ -233,15 +288,21 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 | `POST /api/assistant/manual-proposals` | 매뉴얼 개선 제안 요청 `{"equipmentId","metric"}` → PENDING |
 | `GET /api/assistant/tasks` | 최근 AI 작업 20건 |
 | `GET /api/assistant/tasks/{id}/context` · `POST …/result` | 재료 읽기 · 결과 저장 (에이전트가 호출) |
-| `GET /api/stream` | SSE: `readings` · `alarm` · `forecast` · `work-order` · `handover` · `assistant` · `ping` |
+| `GET /api/setpoints?equipmentId=` | 원격 설정값 · 운전 범위 · 현재값 (게이트웨이가 30초 넘게 조용하면 현재값 null, 에이전트가 호출) |
+| `POST /api/work-orders/{id}/setpoint-changes` | 권장 설정값 변경 제안 `{"tag","proposedValue","reason","sources","generator"}` (범위 밖이면 422, 에이전트가 호출) |
+| `GET /api/setpoint-changes` | 최근 설정값 변경 30건 (제안 · 승인 · 결과 · 외부 명령) |
+| `POST /api/setpoint-changes/{id}/approve` · `…/reject` | 승인(명령 전송) · 거절 `{"worker","note"}` |
+| `GET /api/setpoint-changes/{id}/audit` | 감사 기록 (제안 → 승인 → 반영/인터록 거부, 누가 · 언제 · 전후 값) |
+| `GET /api/stream` | SSE: `readings` · `alarm` · `forecast` · `work-order` · `handover` · `assistant` · `setpoint` · `ping` |
 
 ## 설계 포인트
 
-- **OT/IT 경계를 MQTT로 분리** — 센서는 백엔드를 모르고 토픽에만 발행합니다. 실제 설비로 바꿀 때 PLC/OPC UA 게이트웨이가 같은 토픽에 발행하면 나머지는 그대로입니다.
+- **OT/IT 경계를 MQTT로 분리** — 센서는 백엔드를 모르고 토픽에만 발행합니다. 실제로 가상 PLC(OPC UA) + 엣지 게이트웨이로 바꿔 띄워도 백엔드 코드는 그대로입니다. 게이트웨이는 PLC 주소 공간을 browse 해서 태그를 찾고, 구독(subscription)으로 값이 바뀔 때만 받습니다.
 - **알람은 상태를 가진 객체** — 설비·지표마다 활성 알람은 하나뿐이고, 같은 알람 안에서 경고 → 위험 상승, 최악값 누적, 히스테리시스 해제를 처리합니다. 알람이 쏟아지지 않게 하기 위해서입니다.
 - **커밋 후 이벤트** — 알람 발행과 대시보드 전송은 `@TransactionalEventListener(AFTER_COMMIT)`로 DB 커밋 뒤에 합니다. 에이전트가 지시서를 저장할 때 알람 행이 반드시 있도록 보장합니다.
 - **설명 가능한 RAG** — 매뉴얼을 섹션 단위로 쪼개 문자 n-gram TF-IDF로 검색하고, 설비 유형·지표가 맞으면 가점을 줍니다. 지시서마다 근거 섹션과 점수를 남겨 "왜 이 조치인가"를 추적할 수 있습니다. 한국어 형태소 분석이나 모델 다운로드 없이 동작합니다.
-- **사람이 최종 판단** — 에이전트는 설비를 직접 조작하지 않고 지시서만 작성합니다. 작업자가 지시서를 확인하고 조치 결과를 남기는 단계를 화면에 두었습니다.
+- **사람이 최종 판단** — 에이전트는 설비를 직접 조작하지 않고 지시서와 권장 설정값까지만 씁니다. 자율 수준은 "승인 후 실행"입니다: 작업자가 승인해야 명령이 나가고, 승인 · 결과는 감사 기록으로 쌓입니다(수정 · 삭제 없음).
+- **안전 인터록은 PLC에 남긴다** — 백엔드의 운전 범위와 별개로 PLC 안에 하드 리밋과 위험 조건 인터록이 있습니다. 백엔드에 버그가 있거나 누가 게이트웨이에 직접 명령을 넣어도 PLC가 거부하고(`BadOutOfRange` · `BadInvalidState`), 그 시도도 기록됩니다. 승인 후 15초 안에 설비 응답이 없으면 실패로 닫습니다.
 - **현장 경험이 쌓이는 구조** — 작업자가 입력한 원인 · 조치 · 결과가 다음 지시서의 근거가 됩니다. 매뉴얼에는 없는 "이 설비는 보통 이게 원인이었다"는 현장 지식이 매뉴얼 절차 옆에 붙습니다. 지금은 같은 설비 · 지표로 찾고, 이력이 많아지면 증상 유사도로 검색하는 방향으로 넓힐 수 있습니다.
 - **근거를 강제한 LLM** — 키가 있으면 Claude가 지시서 문장을 씁니다. 검색은 그대로 TF-IDF가 하고, Claude에는 매뉴얼 구절(S1, S2…)과 과거 조치(H1…)에 번호를 붙여 보냅니다. 응답은 JSON 스키마로 고정하고 모든 항목에 근거 번호를 달게 한 뒤, 근거가 없거나 목록에 없는 번호를 쓰면 그 지시서를 버리고 템플릿으로 씁니다. 지시서에는 항목마다 *(근거: 점검 절차)* 처럼 출처가 붙습니다.
 - **LLM이 없어도 동작** — 생성기는 `generate(alarm, index, history)` 인터페이스 하나입니다. 키가 없거나, 크레딧 · 네트워크 오류가 나거나, 근거 검증에 실패하면 매뉴얼 템플릿 생성기가 같은 형식으로 씁니다. 데모는 오프라인에서도 끝까지 돕니다.
@@ -257,4 +318,5 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 - [x] 추세 기반 조기 경보 (평소 수준 학습 + 회귀 기울기)
 - [x] 교대 인수인계 리포트, AI 질문, 매뉴얼 개선 제안
 - [ ] 다변량 이상 감지 (진동 + 전류 + 온도 상관관계), 예측 경보 정확도 기록
-- [ ] OPC UA · Modbus 게이트웨이 연동, Docker Compose 배포
+- [x] OPC UA 가상 PLC · 엣지 게이트웨이, 승인형 설정값 제어 (PLC 인터록)
+- [ ] OPC UA 보안(서명 · 암호화, 사용자 인증), Modbus, Sparkplug B, Docker Compose 배포
