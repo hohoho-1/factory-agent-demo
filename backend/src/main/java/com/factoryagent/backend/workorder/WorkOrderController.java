@@ -16,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -62,12 +63,23 @@ public class WorkOrderController {
         return repository.findTop50ByOrderByCreatedAtDesc();
     }
 
-    /** 과거 유사 조치 이력: 같은 설비·지표에서 작업자가 조치를 마친 지시서. 에이전트가 새 지시서에 넣는다. */
+    /**
+     * 과거 유사 조치 이력: 작업자가 조치를 마친 지시서. 에이전트가 새 지시서에 넣는다.
+     * 같은 설비·지표 최근 5건, equipmentType 을 주면 같은 유형 다른 설비의 같은 지표 최근 3건을 뒤에 붙인다.
+     * 어느 쪽인지는 각 항목의 equipmentId 로 구분한다.
+     */
     @GetMapping("/api/work-orders/history")
     public List<WorkOrder> history(@RequestParam String equipmentId, @RequestParam String metric,
-                                   @RequestParam(defaultValue = "-1") Long excludeAlarmId) {
-        return repository.findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(
-                equipmentId, metric, WorkOrderStatus.COMPLETED, excludeAlarmId);
+                                   @RequestParam(defaultValue = "-1") Long excludeAlarmId,
+                                   @RequestParam(required = false) String equipmentType) {
+        List<WorkOrder> result = new ArrayList<>(
+                repository.findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(
+                        equipmentId, metric, WorkOrderStatus.COMPLETED, excludeAlarmId));
+        if (equipmentType != null && !equipmentType.isBlank()) {
+            result.addAll(repository.findTop3ByEquipmentTypeAndEquipmentIdNotAndMetricAndStatusOrderByCompletedAtDesc(
+                    equipmentType, equipmentId, metric, WorkOrderStatus.COMPLETED));
+        }
+        return result;
     }
 
     /** 작업자가 지시서를 확인했다. */

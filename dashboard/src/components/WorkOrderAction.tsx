@@ -45,6 +45,8 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
   const [initialWorker, setInitialWorker] = useState(loadWorker)
   const [worker, setWorker] = useState(initialWorker)
   const [rootCause, setRootCause] = useState('')
+  // 선택지에 없는 원인을 직접 쓰는 중인지 (선택지가 없는 예전 지시서는 항상 직접 입력)
+  const [otherCause, setOtherCause] = useState(false)
   const [actionTaken, setActionTaken] = useState('')
   const [outcome, setOutcome] = useState<ActionOutcome>('RESOLVED')
   const [busy, setBusy] = useState(false)
@@ -68,6 +70,17 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
     } finally {
       setBusy(false)
     }
+  }
+
+  // 매뉴얼 원인 이름을 그대로 저장해야 통계·'우선 확인'에서 같은 원인으로 묶인다
+  const options = workOrder.causeOptions ?? []
+  const pickCause = (o: string) => {
+    setOtherCause(false)
+    setRootCause((current) => (current === o ? '' : o))
+  }
+  const pickOther = () => {
+    setOtherCause(true)
+    setRootCause('')
   }
 
   const acknowledge = () => send(`/api/work-orders/${workOrder.id}/acknowledge`, { worker })
@@ -137,20 +150,47 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
             {workOrder.worker} · {workOrder.acknowledgedAt && formatTime(workOrder.acknowledgedAt)} 확인. 점검·조치를
             마치면 결과를 남겨 주세요.
           </p>
-          <label className="field">
+          <div className="field">
             <span>확인한 원인</span>
-            <input
-              value={rootCause}
-              onChange={(e) => setRootCause(e.target.value)}
-              placeholder="예: 모터측 베어링 윤활 부족"
-            />
-          </label>
+            {options.length > 0 && (
+              <div className="cause-options" role="group" aria-label="매뉴얼의 가능 원인">
+                {options.map((o) => (
+                  <button
+                    key={o}
+                    type="button"
+                    className={`cause-option${!otherCause && rootCause === o ? ' cause-option--on' : ''}`}
+                    aria-pressed={!otherCause && rootCause === o}
+                    onClick={() => pickCause(o)}
+                  >
+                    {o}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={`cause-option${otherCause ? ' cause-option--on' : ''}`}
+                  aria-pressed={otherCause}
+                  onClick={pickOther}
+                >
+                  기타 (직접 입력)
+                </button>
+              </div>
+            )}
+            {(otherCause || options.length === 0) && (
+              <input
+                value={rootCause}
+                onChange={(e) => setRootCause(e.target.value)}
+                placeholder="현장에서 확인한 원인"
+                aria-label="확인한 원인 직접 입력"
+                autoFocus={otherCause}
+              />
+            )}
+          </div>
           <label className="field">
             <span>조치 내용 *</span>
             <textarea
               value={actionTaken}
               onChange={(e) => setActionTaken(e.target.value)}
-              placeholder="예: 그리스 보충, 커플링 볼트 재조임 후 재가동. 진동 2.8mm/s 확인"
+              placeholder="점검한 내용, 한 조치, 조치 후 측정값 (예: 부품 교체 후 재가동, 정상 범위 확인)"
               rows={3}
               required
             />

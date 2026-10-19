@@ -35,11 +35,12 @@ class Backend:
             return json.load(r)
 
     def get_history(self, alarm: dict) -> list[dict]:
-        """같은 설비·지표에서 작업자가 조치를 마친 과거 지시서 (최근 완료 순)."""
+        """작업자가 조치를 마친 과거 지시서: 같은 설비·지표 먼저, 이어서 같은 유형 다른 설비 (각각 최근 완료 순)."""
         query = urllib.parse.urlencode({
             "equipmentId": alarm["equipmentId"],
             "metric": alarm["metric"],
             "excludeAlarmId": alarm["id"],
+            "equipmentType": alarm["equipmentType"],
         })
         with urllib.request.urlopen(f"{self.base_url}/api/work-orders/history?{query}", timeout=5) as r:
             return json.load(r)

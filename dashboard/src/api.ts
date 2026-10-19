@@ -49,6 +49,9 @@ export interface WorkOrder {
   references: ReferenceDoc[]
   generator: string
   createdAt: string
+  equipmentType: string
+  /** 근거 매뉴얼의 '가능 원인'. 작업자가 원인을 고르는 선택지 (이전 지시서는 빈 배열) */
+  causeOptions: string[]
   status: WorkOrderStatus
   worker: string | null
   acknowledgedAt: string | null

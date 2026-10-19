@@ -7,6 +7,7 @@ LLM 을 붙일 때는 같은 generate(alarm, index, history) 인터페이스로 
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from .rag import Hit, ManualIndex
@@ -46,26 +47,63 @@ def _local_time(iso: str | None) -> str:
     return datetime.fromisoformat(iso).astimezone().strftime("%m/%d %H:%M")
 
 
-def history_section(history: list[dict]) -> list[str]:
-    """작업자가 남긴 조치 결과를 지시서 앞쪽에 붙일 마크다운 줄로 만든다. 이력이 없으면 빈 목록."""
+def cause_options(cause_section: str) -> list[str]:
+    """매뉴얼 '가능 원인' 목록을 작업자가 고를 짧은 이름으로: ':' 뒤 설명과 괄호 설명은 뺀다."""
+    options = []
+    for line in cause_section.splitlines():
+        if not line.startswith("- "):
+            continue
+        label = re.sub(r"\s*\([^)]*\)", "", line[2:].split(":")[0]).strip()
+        if label and label not in options:
+            options.append(label)
+    return options
+
+
+def _history_line(h: dict, show_equipment: bool) -> str:
+    where = f"{h['equipmentId']} · " if show_equipment else ""
+    return (f"- {_local_time(h.get('completedAt'))} · {where}WO-{h['id']}"
+            f" ({SEVERITY_KO.get(h['severity'], h['severity'])})"
+            f" · **{OUTCOME_KO.get(h.get('outcome'), h.get('outcome') or '-')}** · {h.get('worker') or '-'}"
+            f" — 원인: {h.get('rootCause') or '미확인'} / 조치: {h.get('actionTaken') or '-'}")
+
+
+def _first_resolved(history: list[dict]) -> dict | None:
+    return next((h for h in history if h.get("outcome") == "RESOLVED" and h.get("rootCause")), None)
+
+
+def history_section(history: list[dict], equipment_id: str | None = None) -> list[str]:
+    """
+    작업자가 남긴 조치 결과를 지시서 앞쪽에 붙일 마크다운 줄로 만든다. 이력이 없으면 빈 목록.
+    equipment_id 를 주면 같은 설비 기록과 같은 유형 다른 설비 기록을 나눠 보여 준다.
+    """
     if not history:
         return []
+    same = [h for h in history if equipment_id is None or h.get("equipmentId", equipment_id) == equipment_id]
+    others = [h for h in history if h not in same]
+
+    counts = " · ".join(part for part in (
+        f"같은 설비 {len(same)}건" if same else "",
+        f"같은 유형 다른 설비 {len(others)}건" if others else "",
+    ) if part)
     lines = [
-        f"## 과거 유사 조치 이력 ({len(history)}건)",
-        "같은 설비·지표에서 작업자가 조치를 마친 기록입니다. 매뉴얼 절차와 함께 참고하세요.",
+        f"## 과거 유사 조치 이력 ({counts})",
+        "작업자가 조치를 마친 기록입니다. 매뉴얼 절차와 함께 참고하세요.",
         "",
     ]
-    resolved = next((h for h in history if h.get("outcome") == "RESOLVED" and h.get("rootCause")), None)
+    resolved = _first_resolved(same)
     if resolved:
-        lines.append(f"> **우선 확인**: 지난번 해결된 원인 '{resolved['rootCause']}'"
-                     f" (WO-{resolved['id']}, {_local_time(resolved.get('completedAt'))})")
-        lines.append("")
-    for h in history:
-        lines.append(
-            f"- {_local_time(h.get('completedAt'))} · WO-{h['id']} ({SEVERITY_KO.get(h['severity'], h['severity'])})"
-            f" · **{OUTCOME_KO.get(h.get('outcome'), h.get('outcome') or '-')}** · {h.get('worker') or '-'}"
-            f" — 원인: {h.get('rootCause') or '미확인'} / 조치: {h.get('actionTaken') or '-'}"
-        )
+        lines += [f"> **우선 확인**: 지난번 해결된 원인 '{resolved['rootCause']}'"
+                  f" (WO-{resolved['id']}, {_local_time(resolved.get('completedAt'))})", ""]
+    elif (other := _first_resolved(others)) is not None:
+        lines += [f"> **참고**: 같은 유형 설비 {other['equipmentId']}에서 해결된 원인 '{other['rootCause']}'"
+                  f" (WO-{other['id']}, {_local_time(other.get('completedAt'))})", ""]
+
+    if others:
+        if same:
+            lines += [f"**같은 설비 ({equipment_id})**", *[_history_line(h, False) for h in same], ""]
+        lines += ["**같은 유형 다른 설비**", *[_history_line(h, True) for h in others]]
+    else:
+        lines += [_history_line(h, False) for h in same]
     lines.append("")
     return lines
 
@@ -109,7 +147,7 @@ class TemplateGenerator:
             f"- 최초 발생: {alarm['raisedAt']}",
             f"- 근거 매뉴얼: {manual.id} {manual.title}",
             "",
-            *history_section(history),
+            *history_section(history, alarm["equipmentId"]),
             "## 추정 원인",
             section("가능 원인"),
             "",
@@ -135,6 +173,7 @@ class TemplateGenerator:
             "body": body,
             "generator": self.name,
             "references": [_reference(h) for h in hits],
+            "causeOptions": cause_options(manual.sections.get("가능 원인", "")),
         }
 
 

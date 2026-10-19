@@ -697,6 +697,39 @@ p {
   font-size: 12px;
 }
 
+/* ---- 원인 선택지 ---- */
+.cause-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cause-option {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--axis);
+  background: var(--surface);
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.cause-option:hover {
+  border-color: var(--series-1);
+}
+
+.cause-option--on {
+  border-color: var(--series-1);
+  background: color-mix(in srgb, var(--series-1) 14%, transparent);
+  font-weight: 600;
+}
+
+.cause-options + input {
+  margin-top: 6px;
+}
+
 /* ---- 작업자 조치 입력 ---- */
 .action {
   margin-top: 20px;

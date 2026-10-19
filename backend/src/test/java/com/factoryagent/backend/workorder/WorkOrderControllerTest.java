@@ -65,6 +65,22 @@ class WorkOrderControllerTest {
     }
 
     @Test
+    void historyPutsSameEquipmentFirstThenSameTypeOthersOnlyWhenTypeGiven() {
+        WorkOrder same = WorkOrderFixtures.completed(20, alarm, "베어링", ActionOutcome.RESOLVED, 60);
+        WorkOrder other = WorkOrderFixtures.completed(21, alarm(2, "MIXER-02", "vibration", Severity.WARNING),
+                "임펠러", ActionOutcome.RESOLVED, 60);
+        when(repository.findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(
+                "MIXER-01", "vibration", WorkOrderStatus.COMPLETED, 9L)).thenReturn(List.of(same));
+        when(repository.findTop3ByEquipmentTypeAndEquipmentIdNotAndMetricAndStatusOrderByCompletedAtDesc(
+                "MIXER", "MIXER-01", "vibration", WorkOrderStatus.COMPLETED)).thenReturn(List.of(other));
+
+        assertThat(controller.history("MIXER-01", "vibration", 9L, "MIXER"))
+                .extracting(WorkOrder::getId).containsExactly(20L, 21L);
+        assertThat(controller.history("MIXER-01", "vibration", 9L, null))
+                .extracting(WorkOrder::getId).containsExactly(20L);
+    }
+
+    @Test
     void blankWorkerBecomesDefault() {
         WorkOrder w = workOrder(10, alarm);
         when(repository.findById(10L)).thenReturn(Optional.of(w));

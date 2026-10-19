@@ -38,6 +38,10 @@ public class WorkOrder {
     @Column(name = "equipment_id", nullable = false, length = 32)
     private String equipmentId;
 
+    /** 같은 유형의 다른 설비 조치 이력을 찾을 때 쓴다. */
+    @Column(name = "equipment_type", nullable = false, length = 32)
+    private String equipmentType;
+
     @Column(nullable = false, length = 32)
     private String metric;
 
@@ -58,6 +62,11 @@ public class WorkOrder {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "reference_docs")
     private List<ReferenceDoc> references;
+
+    /** 작업자가 원인을 고를 선택지 (근거 매뉴얼의 '가능 원인'). 이전에 만든 지시서는 null. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "cause_options")
+    private List<String> causeOptions;
 
     /** 작성 방식: template / llm 등. */
     @Column(nullable = false, length = 32)
@@ -103,12 +112,14 @@ public class WorkOrder {
         WorkOrder w = new WorkOrder();
         w.alarmId = alarm.getId();
         w.equipmentId = alarm.getEquipmentId();
+        w.equipmentType = alarm.getEquipmentType();
         w.metric = alarm.getMetric();
         w.severity = alarm.getSeverity();
         w.title = req.title();
         w.summary = req.summary();
         w.body = req.body();
         w.references = req.references() == null ? List.of() : req.references();
+        w.causeOptions = req.causeOptions() == null ? List.of() : req.causeOptions();
         w.generator = req.generator() == null ? "unknown" : req.generator();
         w.createdAt = Instant.now();
         w.status = WorkOrderStatus.OPEN;
@@ -153,6 +164,8 @@ public class WorkOrder {
     public Long getId() { return id; }
     public Long getAlarmId() { return alarmId; }
     public String getEquipmentId() { return equipmentId; }
+    public String getEquipmentType() { return equipmentType; }
+    public List<String> getCauseOptions() { return causeOptions == null ? List.of() : causeOptions; }
     public String getMetric() { return metric; }
     public Severity getSeverity() { return severity; }
     public String getTitle() { return title; }
