@@ -27,6 +27,7 @@ from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
+from .assistant import AssistantWriter
 from .handover import HandoverWriter
 from .rag import ManualIndex, load_manuals
 from .work_order import TemplateGenerator
@@ -84,6 +85,17 @@ class Backend:
     def save_handover(self, report_id: int, report: dict) -> dict:
         return self._post(f"/api/handover-reports/{report_id}/result", report)
 
+    def get_assistant_context(self, task_id: int) -> dict:
+        with urllib.request.urlopen(f"{self.base_url}/api/assistant/tasks/{task_id}/context", timeout=5) as r:
+            return json.load(r)
+
+    def get_action_stats(self) -> list[dict]:
+        with urllib.request.urlopen(f"{self.base_url}/api/action-stats", timeout=5) as r:
+            return json.load(r)
+
+    def save_assistant(self, task_id: int, result: dict) -> dict:
+        return self._post(f"/api/assistant/tasks/{task_id}/result", result)
+
     def _post(self, path: str, payload: dict) -> dict:
         req = urllib.request.Request(
             f"{self.base_url}{path}",
@@ -101,8 +113,20 @@ class Agent:
         self.backend = backend
         self.generator = generator or TemplateGenerator()
         self.dry_run = dry_run
-        # 인수인계 리포트도 지시서와 같은 LLM 설정을 쓴다 (키가 없으면 템플릿)
-        self.handover = HandoverWriter(getattr(self.generator, "primary", None))
+        # 인수인계 리포트·AI 질의·매뉴얼 개선 제안도 지시서와 같은 LLM 설정을 쓴다 (키가 없으면 템플릿)
+        llm = getattr(self.generator, "primary", None)
+        self.handover = HandoverWriter(llm)
+        self.assistant = AssistantWriter(index, llm)
+
+    def handle_assistant(self, task_id: int) -> None:
+        ctx = self.backend.get_assistant_context(task_id)
+        result = self.assistant.write(ctx, self.backend.get_action_stats())
+        print(f"[AGENT] assistant #{task_id} {ctx['task']['type']}: generator {result['generator']}")
+        if self.dry_run:
+            print(result["body"])
+            return
+        self.backend.save_assistant(task_id, result)
+        print(f"        -> assistant #{task_id} saved: {result['title']}")
 
     def handle_handover(self, report_id: int) -> None:
         ctx = self.backend.get_handover_context(report_id)
@@ -140,10 +164,11 @@ class Agent:
             return []
 
 
-def run_mqtt(agent: Agent, host: str, port: int, topic: str, handover_topic: str) -> None:
+def run_mqtt(agent: Agent, host: str, port: int, topic: str, handover_topic: str, assistant_topic: str) -> None:
     def on_connect(client, userdata, flags, reason_code, properties):
-        print(f"connected to mqtt://{host}:{port} ({reason_code}), subscribing {topic}, {handover_topic}")
-        client.subscribe([(topic, 1), (handover_topic, 1)])
+        print(f"connected to mqtt://{host}:{port} ({reason_code}),"
+              f" subscribing {topic}, {handover_topic}, {assistant_topic}")
+        client.subscribe([(topic, 1), (handover_topic, 1), (assistant_topic, 1)])
 
     # LLM 지시서는 수십 초 걸린다. 알람마다 작업 스레드에서 처리해 경고·위험 지시서를 나란히 만들고,
     # MQTT 수신 루프(keepalive 포함)는 막지 않는다.
@@ -162,6 +187,12 @@ def run_mqtt(agent: Agent, host: str, port: int, topic: str, handover_topic: str
         except (urllib.error.URLError, KeyError, ValueError, RuntimeError) as e:
             print(f"[AGENT] failed to write handover #{report_id}: {e!r}", file=sys.stderr)
 
+    def assistant_safely(task_id: int) -> None:
+        try:
+            agent.handle_assistant(task_id)
+        except (urllib.error.URLError, KeyError, ValueError, RuntimeError) as e:
+            print(f"[AGENT] failed to write assistant task #{task_id}: {e!r}", file=sys.stderr)
+
     def on_message(client, userdata, msg):
         try:
             data = json.loads(msg.payload.decode("utf-8"))
@@ -170,6 +201,8 @@ def run_mqtt(agent: Agent, host: str, port: int, topic: str, handover_topic: str
             return
         if msg.topic == handover_topic and "reportId" in data:
             workers.submit(handover_safely, data["reportId"])
+        elif msg.topic == assistant_topic and "taskId" in data:
+            workers.submit(assistant_safely, data["taskId"])
         elif data.get("event") in HANDLED_EVENTS and "alarm" in data:
             workers.submit(handle_safely, data["alarm"], data["event"])
 
@@ -192,10 +225,12 @@ def main() -> int:
     p.add_argument("--port", type=int, default=1883)
     p.add_argument("--topic", default="factory/line1/alarms")
     p.add_argument("--handover-topic", default="factory/line1/handover/requests")
+    p.add_argument("--assistant-topic", default="factory/line1/assistant/requests")
     p.add_argument("--api", default="http://localhost:8080", help="백엔드 주소")
     p.add_argument("--search", help="매뉴얼 검색만 수행할 질의")
     p.add_argument("--alarm-id", type=int, help="기존 알람 1건에 대해 지시서 작성")
     p.add_argument("--handover-id", type=int, help="기존 인수인계 리포트 요청 1건을 작성")
+    p.add_argument("--assistant-id", type=int, help="기존 AI 작업(질의·매뉴얼 개선 제안) 1건을 작성")
     p.add_argument("--dry-run", action="store_true", help="저장하지 않고 지시서 본문만 출력")
     p.add_argument("--generator", choices=["auto", "template", "llm"], default="auto",
                    help="auto: ANTHROPIC_API_KEY 가 있으면 LLM(실패 시 템플릿), 없으면 템플릿")
@@ -221,8 +256,11 @@ def main() -> int:
     if args.handover_id:
         agent.handle_handover(args.handover_id)
         return 0
+    if args.assistant_id:
+        agent.handle_assistant(args.assistant_id)
+        return 0
 
-    run_mqtt(agent, args.host, args.port, args.topic, args.handover_topic)
+    run_mqtt(agent, args.host, args.port, args.topic, args.handover_topic, args.assistant_topic)
     return 0
 
 

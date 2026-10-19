@@ -128,6 +128,7 @@ class Facts:
             f"A{a['id']}", _where(a), SEVERITY_KO.get(a["severity"], a["severity"]),
             f"발생 {_hm(a['raisedAt'])}", f"최악 {_fmt(a['peakValue'])}{unit} (기준 {op} {_fmt(a['thresholdValue'])})",
             "진행 중" if a["status"] == "ACTIVE" else f"해제 {_hm(a.get('clearedAt'))} (지속 {_duration(a)})",
+            *([f"추세 예측 경보가 {a['forecastLeadSeconds']}초 먼저 알림"] if a.get("forecastLeadSeconds") else []),
         ])
 
 

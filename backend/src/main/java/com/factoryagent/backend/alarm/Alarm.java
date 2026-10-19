@@ -77,7 +77,15 @@ public class Alarm {
     @Column(name = "cleared_at")
     private Instant clearedAt;
 
+    /** 추세 예측 경보가 이 알람보다 몇 초 먼저였는지. 예측 없이 발생했으면 null. */
+    @Column(name = "forecast_lead_seconds")
+    private Long forecastLeadSeconds;
+
     protected Alarm() {
+    }
+
+    public void markForecast(long leadSeconds) {
+        this.forecastLeadSeconds = leadSeconds;
     }
 
     public static Alarm raise(String equipmentId, String equipmentType, String metric, String unit,
@@ -148,4 +156,5 @@ public class Alarm {
     public Instant getRaisedAt() { return raisedAt; }
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getClearedAt() { return clearedAt; }
+    public Long getForecastLeadSeconds() { return forecastLeadSeconds; }
 }

@@ -15,6 +15,17 @@ public interface WorkOrderRepository extends JpaRepository<WorkOrder, Long> {
 
     List<WorkOrder> findByStatus(WorkOrderStatus status);
 
+    /** AI 질의 재료: 최근 지시서. */
+    List<WorkOrder> findTop200ByCreatedAtAfterOrderByCreatedAtDesc(Instant after);
+
+    /** 매뉴얼 개선 제안 재료: 설비·지표의 조치 완료 지시서. */
+    List<WorkOrder> findTop100ByEquipmentIdAndMetricAndStatusOrderByCompletedAtDesc(
+            String equipmentId, String metric, WorkOrderStatus status);
+
+    /** 매뉴얼 개선 제안 재료: 같은 유형 다른 설비의 조치 완료 지시서. */
+    List<WorkOrder> findTop50ByEquipmentTypeAndEquipmentIdNotAndMetricAndStatusOrderByCompletedAtDesc(
+            String equipmentType, String excludeEquipmentId, String metric, WorkOrderStatus status);
+
     /** 시간대 안에 작성·완료된 지시서 + 아직 열린(미확인·조치 중) 지시서. 인수인계 리포트 재료. */
     @Query("select w from WorkOrder w where (w.createdAt >= :from and w.createdAt < :to)"
             + " or (w.completedAt >= :from and w.completedAt < :to)"

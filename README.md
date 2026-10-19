@@ -61,6 +61,9 @@ flowchart LR
 8. **다음 지시서에 반영** — 같은 설비 · 지표에 다시 이상이 생기면 에이전트가 완료된 조치 기록을 조회해 지시서 앞쪽에 **과거 유사 조치 이력**을 넣는다. 지난번에 해결된 원인은 "우선 확인"으로 강조한다. 같은 유형의 다른 설비(TANK-01 ↔ TANK-02) 기록도 따로 묶어 "참고"로 보여 준다.
 9. **조치 이력 요약** — 대시보드 하단 표에 설비 · 지표별 이상 횟수, 해결률, 평균 처리 시간, 작업자가 입력한 주요 원인이 쌓인다. 기록이 늘수록 반복 고장 설비와 원인이 드러난다.
 10. **교대 인수인계 리포트** — 상단 **교대 인수인계** 버튼으로 최근 1 · 8 · 24시간 리포트를 요청하면, 에이전트가 그 시간대 알람 · 조치를 읽어 요약 → 주요 이상과 조치 → 다음 교대가 이어서 할 일 → 주의해서 볼 설비 순으로 쓴다. 집계 숫자는 코드가 세고, Claude는 알람 · 지시서 번호를 근거로 문장만 쓴다 (번호 검증 실패 시 템플릿).
+11. **추세 기반 조기 경보** — 기준을 넘기 전에, 최근 40초 측정값의 기울기로 "약 N초 뒤 경고 기준 도달"을 예측해 ◆ 예측으로 알린다. 신호마다 평소 수준과 흔들림(σ)을 배워 두고, 평소에서 4σ 이상 · 기준까지 거리의 25% 이상 벗어난 직선 추세만 잡는다 (정상 노이즈 3시간 20분 시뮬레이션에서 오경보 0건). 실제 알람으로 이어지면 "발생 N초 전에 예측됨"이 알람 기록에 남는다. 데모는 `mixer_bearing_wear`(천천히 오르는 진동)로 20~30초 먼저 알린다.
+12. **AI에게 질문** — 상단 버튼에서 "배합기 진동 원인이 주로 뭐였어?" 같은 질문을 하면, 에이전트가 최근 7일 알람 · 조치 기록, 설비별 통계, 매뉴얼을 번호 붙여 Claude에 주고 근거 번호가 달린 답을 받는다. 재료로 답할 수 없는 질문은 "답할 수 없다"고 답한다.
+13. **매뉴얼 개선 제안** — 조치 이력 요약 표의 **매뉴얼 개선 제안**을 누르면, 그 설비 · 지표의 조치 기록을 매뉴얼과 비교해 개선안 초안을 쓴다. 모든 변경 제안은 현장 조치 기록 근거가 있어야 하고, 고칠 섹션은 실제 매뉴얼 섹션 중에서만 고른다. 사람이 검토해 반영하는 초안이다.
 
 ![AI 조치 지시서](docs/images/work-order.png)
 
@@ -88,6 +91,7 @@ factory-agent-demo/
 │       ├── work_order.py            # 템플릿 지시서 생성기 (키가 없거나 LLM 실패 시)
 │       ├── llm.py                   # Claude 지시서 생성기 (근거 번호 인용 · 검증)
 │       ├── handover.py              # 교대 인수인계 리포트 (Claude · 템플릿)
+│       ├── assistant.py             # AI 질문 답변 · 매뉴얼 개선 제안 (Claude · 템플릿)
 │       └── manuals/*.md             # 가상 설비 매뉴얼 7종
 ├── backend/                         # Spring Boot
 │   └── src/main/java/com/factoryagent/backend/
@@ -96,6 +100,8 @@ factory-agent-demo/
 │       ├── alarm/                   # 임계값 규칙 · 알람 발생/상승/해제
 │       ├── workorder/               # 조치 지시서 저장 · 조회 · 작업자 확인 · 조치 결과
 │       ├── handover/                # 교대 인수인계 리포트 요청 · 재료 · 결과
+│       ├── forecast/                # 추세 기반 조기 경보 (회귀 · 평소 수준 학습)
+│       ├── assistant/               # AI 질문 · 매뉴얼 개선 제안 요청 · 재료 · 결과
 │       └── stream/                  # 대시보드용 SSE
 ├── dashboard/                       # React 관제 화면
 ├── scripts/                         # 데모 실행 · 이상 주입 · 종료
@@ -160,6 +166,7 @@ powershell -File scripts\inject.ps1 mixer_vibration
 | `mixer_vibration` | 배합기 진동 상승 | MAN-MIX-VIB-01 |
 | `mixer_overcurrent` | 배합기 모터 과전류 | MAN-MIX-CUR-01 |
 | `filler_slowdown` | 충진기 속도 저하 | MAN-FIL-SPD-01 |
+| `mixer_bearing_wear` | 배합기 진동이 천천히 상승 (약 40초 뒤 경고, 추세 예측 데모용) | MAN-MIX-VIB-01 |
 | `random` | 위 중 하나 | |
 
 ### 4. 종료
@@ -198,6 +205,7 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 | `factory/line1/{설비ID}/telemetry` | 센서 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` |
 | `factory/line1/alarms` | 백엔드 → 에이전트 | `{"event":"RAISED"\|"ESCALATED"\|"CLEARED","alarm":{...}}` |
 | `factory/line1/handover/requests` | 백엔드 → 에이전트 | `{"reportId","from","to"}` 인수인계 리포트 작성 요청 |
+| `factory/line1/assistant/requests` | 백엔드 → 에이전트 | `{"taskId","type"}` AI 질문 · 매뉴얼 개선 제안 작성 요청 |
 | `factory/line1/sim/anomaly` | 데모 조작 → 센서 | 시나리오 이름 (예: `mixer_vibration`) |
 
 ## REST API
@@ -220,7 +228,12 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 | `GET /api/handover-reports` | 최근 리포트 10건 |
 | `GET /api/handover-reports/{id}/context` | 리포트 재료: 시간대 알람 · 지시서 요약 (에이전트가 호출) |
 | `POST /api/handover-reports/{id}/result` | 작성된 리포트 저장 → DONE (에이전트가 호출) |
-| `GET /api/stream` | SSE: `readings` · `alarm` · `work-order` · `handover` · `ping` |
+| `GET /api/forecasts` | 진행 중인 추세 예측 경보 |
+| `POST /api/assistant/questions` | AI 질문 `{"question"}` (500자 이내) → PENDING |
+| `POST /api/assistant/manual-proposals` | 매뉴얼 개선 제안 요청 `{"equipmentId","metric"}` → PENDING |
+| `GET /api/assistant/tasks` | 최근 AI 작업 20건 |
+| `GET /api/assistant/tasks/{id}/context` · `POST …/result` | 재료 읽기 · 결과 저장 (에이전트가 호출) |
+| `GET /api/stream` | SSE: `readings` · `alarm` · `forecast` · `work-order` · `handover` · `assistant` · `ping` |
 
 ## 설계 포인트
 
@@ -241,5 +254,7 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 - [x] 조치 이력 요약 (설비 · 지표별 이상 횟수 · 해결률 · 평균 처리 시간 · 주요 원인)
 - [x] 원인 선택지(매뉴얼 '가능 원인'), 같은 유형 다른 설비 이력 포함
 - [ ] 조치 이력을 증상 유사도로 검색, 설비별 MTBF · 원인 추세
-- [ ] 다변량 이상 감지 (진동 + 전류 + 온도 상관관계), 추세 기반 조기 경보
+- [x] 추세 기반 조기 경보 (평소 수준 학습 + 회귀 기울기)
+- [x] 교대 인수인계 리포트, AI 질문, 매뉴얼 개선 제안
+- [ ] 다변량 이상 감지 (진동 + 전류 + 온도 상관관계), 예측 경보 정확도 기록
 - [ ] OPC UA · Modbus 게이트웨이 연동, Docker Compose 배포

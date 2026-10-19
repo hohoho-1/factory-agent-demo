@@ -28,6 +28,8 @@ export interface Alarm {
   raisedAt: string
   updatedAt: string
   clearedAt: string | null
+  /** 추세 예측 경보가 이 알람보다 몇 초 먼저였는지 (예측 없이 발생했으면 null) */
+  forecastLeadSeconds: number | null
 }
 
 export interface ReferenceDoc {
@@ -71,6 +73,46 @@ export interface ActionResult {
   rootCause: string
   actionTaken: string
   outcome: ActionOutcome
+}
+
+/** 추세 기반 예측 경보: 아직 기준 전이지만 이 기울기로 가면 곧 경고 기준에 닿는다 */
+export interface Forecast {
+  equipmentId: string
+  equipmentType: string
+  metric: string
+  unit: string | null
+  direction: 'HIGH' | 'LOW'
+  limit: number
+  currentValue: number
+  slopePerMinute: number
+  secondsToLimit: number
+  etaAt: string
+  raisedAt: string
+  updatedAt: string
+}
+
+export interface ForecastEventMessage {
+  type: 'RAISED' | 'UPDATED' | 'CLEARED'
+  forecast: Forecast
+  /** CLEARED 일 때: ALARM(실제 알람 발생) / RECOVERED(추세가 꺾임) */
+  reason: 'ALARM' | 'RECOVERED' | null
+  /** ALARM 이면 예측이 실제 알람보다 몇 초 먼저였는지 */
+  leadSeconds: number | null
+}
+
+/** AI 작업: 자연어 질의 또는 매뉴얼 개선 제안. PENDING 이면 에이전트가 작성 중 */
+export interface AssistantTask {
+  id: number
+  type: 'QUESTION' | 'MANUAL_PROPOSAL'
+  status: 'PENDING' | 'DONE'
+  question: string | null
+  equipmentId: string | null
+  metric: string | null
+  generator: string | null
+  title: string | null
+  body: string | null
+  createdAt: string
+  completedAt: string | null
 }
 
 /** 교대 인수인계 리포트. PENDING 이면 에이전트가 작성 중 */

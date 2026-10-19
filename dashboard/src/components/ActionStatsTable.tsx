@@ -6,15 +6,30 @@ import { formatTime } from '../format'
 interface Props {
   /** 값이 바뀌면 다시 읽는다 (알람 발생·해제, 조치 완료 시점) */
   refreshKey: string
+  /** 이 설비·지표의 조치 이력으로 매뉴얼 개선 제안을 요청한다 */
+  onPropose: (equipmentId: string, metric: string) => Promise<void>
 }
 
 /**
  * 조치 이력 요약: 설비·지표별 이상 횟수와 작업자가 입력한 원인·결과.
  * 기록이 쌓일수록 반복 고장 원인이 보이게 하는 표. 읽기 전용이라 실패해도 다른 화면에는 영향이 없다.
  */
-export function ActionStatsTable({ refreshKey }: Props) {
+export function ActionStatsTable({ refreshKey, onPropose }: Props) {
   const [stats, setStats] = useState<ActionStats[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [proposing, setProposing] = useState<string | null>(null)
+
+  const propose = async (s: ActionStats) => {
+    const key = `${s.equipmentId}:${s.metric}`
+    setProposing(key)
+    try {
+      await onPropose(s.equipmentId, s.metric)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setProposing(null)
+    }
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -53,6 +68,7 @@ export function ActionStatsTable({ refreshKey }: Props) {
                 <th className="num">평균 처리</th>
                 <th>주요 원인 (작업자 입력)</th>
                 <th>최근 발생</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -81,6 +97,21 @@ export function ActionStatsTable({ refreshKey }: Props) {
                     )}
                   </td>
                   <td>{s.lastRaisedAt ? formatTime(s.lastRaisedAt) : '-'}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="link-button"
+                      onClick={() => void propose(s)}
+                      disabled={s.completedCount === 0 || proposing !== null}
+                      title={
+                        s.completedCount === 0
+                          ? '조치 완료 기록이 있어야 매뉴얼과 비교할 수 있습니다'
+                          : 'AI가 조치 이력을 매뉴얼과 비교해 개선안 초안을 씁니다'
+                      }
+                    >
+                      {proposing === `${s.equipmentId}:${s.metric}` ? '요청 중…' : '매뉴얼 개선 제안'}
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

@@ -3,6 +3,9 @@ import {
   getJson,
   type Alarm,
   type AlarmEventMessage,
+  type AssistantTask,
+  type Forecast,
+  type ForecastEventMessage,
   type HandoverReport,
   type Reading,
   type Rules,
@@ -14,6 +17,7 @@ export const WINDOW_MS = 5 * 60 * 1000
 const MAX_ALARMS = 50
 const MAX_WORK_ORDERS = 50
 const MAX_HANDOVERS = 10
+const MAX_ASSISTANT_TASKS = 20
 
 export interface Point {
   t: number
@@ -30,6 +34,9 @@ export interface LiveState {
   alarms: Alarm[]
   workOrders: WorkOrder[]
   handovers: HandoverReport[]
+  assistantTasks: AssistantTask[]
+  /** 진행 중인 예측 경보 (seriesKey → 예측). 실제 알람으로 이어지면 알람의 forecastLeadSeconds 에 남는다 */
+  forecasts: Record<string, Forecast>
   rules: Rules
   connected: boolean
   loaded: boolean
@@ -43,8 +50,12 @@ type Action =
       alarms: Alarm[]
       workOrders: WorkOrder[]
       handovers: HandoverReport[]
+      assistantTasks: AssistantTask[]
+      forecasts: Forecast[]
       rules: Rules
     }
+  | { type: 'forecast'; message: ForecastEventMessage }
+  | { type: 'assistant'; task: AssistantTask }
   | { type: 'readings'; readings: Reading[] }
   | { type: 'alarm'; alarm: Alarm }
   | { type: 'workOrder'; workOrder: WorkOrder }
@@ -58,6 +69,8 @@ const initialState: LiveState = {
   alarms: [],
   workOrders: [],
   handovers: [],
+  assistantTasks: [],
+  forecasts: {},
   rules: {},
   connected: false,
   loaded: false,
@@ -112,6 +125,8 @@ function reducer(state: LiveState, action: Action): LiveState {
         alarms: action.alarms,
         workOrders: action.workOrders,
         handovers: action.handovers,
+        assistantTasks: action.assistantTasks,
+        forecasts: Object.fromEntries(action.forecasts.map((f) => [seriesKey(f.equipmentId, f.metric), f])),
         rules: action.rules,
         loaded: true,
         error: null,
@@ -129,6 +144,21 @@ function reducer(state: LiveState, action: Action): LiveState {
         }
       }
       return { ...state, workOrders: [action.workOrder, ...state.workOrders].slice(0, MAX_WORK_ORDERS) }
+    case 'forecast': {
+      const { type, forecast } = action.message
+      const key = seriesKey(forecast.equipmentId, forecast.metric)
+      if (type !== 'CLEARED') return { ...state, forecasts: { ...state.forecasts, [key]: forecast } }
+      const { [key]: _removed, ...forecasts } = state.forecasts
+      return { ...state, forecasts }
+    }
+    case 'assistant': {
+      // 요청(PENDING)과 작성 완료(DONE)가 같은 id 로 온다. 최근 요청 순
+      const rest = state.assistantTasks.filter((t) => t.id !== action.task.id)
+      const assistantTasks = [action.task, ...rest]
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(0, MAX_ASSISTANT_TASKS)
+      return { ...state, assistantTasks }
+    }
     case 'handover': {
       // 요청(PENDING)과 작성 완료(DONE)가 같은 id 로 온다. 최근 요청 순, 10건까지
       const rest = state.handovers.filter((h) => h.id !== action.report.id)
@@ -151,11 +181,13 @@ function reducer(state: LiveState, action: Action): LiveState {
 export function useLiveData(): LiveState & {
   updateWorkOrder: (wo: WorkOrder) => void
   updateHandover: (report: HandoverReport) => void
+  updateAssistant: (task: AssistantTask) => void
 } {
   const [state, dispatch] = useReducer(reducer, initialState)
   // POST 응답을 바로 반영한다 (SSE 로도 같은 값이 오지만 기다리지 않게)
   const updateWorkOrder = useCallback((workOrder: WorkOrder) => dispatch({ type: 'workOrder', workOrder }), [])
   const updateHandover = useCallback((report: HandoverReport) => dispatch({ type: 'handover', report }), [])
+  const updateAssistant = useCallback((task: AssistantTask) => dispatch({ type: 'assistant', task }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -164,14 +196,18 @@ export function useLiveData(): LiveState & {
 
     const loadSnapshot = async () => {
       try {
-        const [readings, alarms, workOrders, handovers, rules] = await Promise.all([
+        const [readings, alarms, workOrders, handovers, assistantTasks, forecasts, rules] = await Promise.all([
           getJson<Reading[]>(`/api/readings/history?minutes=${WINDOW_MS / 60000}`),
           getJson<Alarm[]>('/api/alarms'),
           getJson<WorkOrder[]>('/api/work-orders'),
           getJson<HandoverReport[]>('/api/handover-reports'),
+          getJson<AssistantTask[]>('/api/assistant/tasks'),
+          getJson<Forecast[]>('/api/forecasts'),
           getJson<Rules>('/api/alarm-rules'),
         ])
-        if (!cancelled) dispatch({ type: 'snapshot', readings, alarms, workOrders, handovers, rules })
+        if (!cancelled) {
+          dispatch({ type: 'snapshot', readings, alarms, workOrders, handovers, assistantTasks, forecasts, rules })
+        }
       } catch (e) {
         if (!cancelled) dispatch({ type: 'error', message: e instanceof Error ? e.message : String(e) })
       }
@@ -197,6 +233,8 @@ export function useLiveData(): LiveState & {
       source.addEventListener('alarm', (e) => dispatch({ type: 'alarm', alarm: parse<AlarmEventMessage>(e).alarm }))
       source.addEventListener('work-order', (e) => dispatch({ type: 'workOrder', workOrder: parse<WorkOrder>(e) }))
       source.addEventListener('handover', (e) => dispatch({ type: 'handover', report: parse<HandoverReport>(e) }))
+      source.addEventListener('forecast', (e) => dispatch({ type: 'forecast', message: parse<ForecastEventMessage>(e) }))
+      source.addEventListener('assistant', (e) => dispatch({ type: 'assistant', task: parse<AssistantTask>(e) }))
     })
 
     return () => {
@@ -205,5 +243,5 @@ export function useLiveData(): LiveState & {
     }
   }, [])
 
-  return { ...state, updateWorkOrder, updateHandover }
+  return { ...state, updateWorkOrder, updateHandover, updateAssistant }
 }

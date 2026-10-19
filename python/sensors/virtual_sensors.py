@@ -36,14 +36,18 @@ class Metric:
     lo: float              # 물리적 하한
     hi: float              # 물리적 상한
     value: float = 0.0
-    drift: float = 0.0     # 이상 주입 시 1틱당 추가 변화량
+    drift: float = 0.0     # 이상 주입 시 1틱당 추가 변화량 (급격한 이상: 되돌리는 힘 없이 밀어 올림)
+    ramp: float = 0.0      # 서서히 오르는 이상: 운전 수준(목표값) 자체가 1틱당 이만큼 이동. 흔들림은 평소대로
+    offset: float = 0.0    # ramp 로 누적된 목표값 이동량
 
     def __post_init__(self):
         self.value = self.target
 
     def step(self):
         # 목표값으로 되돌아가려는 힘 + 노이즈 + 이상 드리프트
-        pull = (self.target - self.value) * 0.1 if self.drift == 0 else 0.0
+        self.offset += self.ramp
+        goal = self.target + self.offset
+        pull = (goal - self.value) * 0.1 if self.drift == 0 else 0.0
         self.value += pull + random.uniform(-self.noise, self.noise) + self.drift
         self.value = max(self.lo, min(self.hi, self.value))
         return round(self.value, 2)
@@ -82,13 +86,17 @@ def build_line():
     ]
 
 
-# 이상 시나리오: (설비, 지표, 1틱당 드리프트, 지속 틱 수)
+# 이상 시나리오: (설비, 지표, 1틱당 변화량, 지속 틱 수[, 방식])
+#   drift: 급격한 이상 (몇 초 만에 기준을 넘음)
+#   ramp : 서서히 진행되는 이상 (베어링 마모처럼 운전 수준이 천천히 오름). 추세 기반 조기 경보 데모용
 SCENARIOS = {
     "tank_overheat": ("TANK-02", "temperature", +1.5, 20),
     "tank_low_level": ("TANK-01", "level", -3.0, 20),
     "mixer_vibration": ("MIXER-01", "vibration", +0.8, 15),
     "mixer_overcurrent": ("MIXER-01", "current", +1.2, 15),
     "filler_slowdown": ("FILLER-01", "speed", -5.0, 15),
+    # 약 40초 뒤 경고(4.5), 약 90초 뒤 위험(7.1), 120초 뒤 정비 완료로 평소 수준 복귀
+    "mixer_bearing_wear": ("MIXER-01", "vibration", +0.05, 120, "ramp"),
 }
 
 
@@ -101,18 +109,25 @@ class AnomalyInjector:
         if self.active:
             print(f"[ANOMALY] skip {name}: {self.active[0]} is still running", flush=True)
             return
-        eq_id, metric_name, drift, ticks = SCENARIOS[name]
+        eq_id, metric_name, change, ticks, *mode = SCENARIOS[name]
+        mode = mode[0] if mode else "drift"
         metric = self.by_id[eq_id].metrics[metric_name]
-        metric.drift = drift
+        if mode == "ramp":
+            metric.ramp = change
+        else:
+            metric.drift = change
         self.active = (name, metric, ticks)
-        print(f"[ANOMALY] start {name}: {eq_id}.{metric_name} drift={drift}/tick x{ticks}", flush=True)
+        print(f"[ANOMALY] start {name}: {eq_id}.{metric_name} {mode}={change}/tick x{ticks}", flush=True)
 
     def tick(self):
         if not self.active:
             return
         name, metric, left = self.active
         if left <= 1:
-            metric.drift = 0.0  # 이후 목표값으로 서서히 복귀
+            # 이후 목표값으로 서서히 복귀 (ramp 는 정비로 운전 수준이 원래대로 돌아온 것으로 본다)
+            metric.drift = 0.0
+            metric.ramp = 0.0
+            metric.offset = 0.0
             self.active = None
             print(f"[ANOMALY] end {name}", flush=True)
         else:

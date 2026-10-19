@@ -406,6 +406,37 @@ p {
   fill: var(--status-critical);
 }
 
+/* 예측: 아직 기준 전. 경고 색을 점선 테두리로만 써서 실제 경고와 구별한다 */
+.badge--forecast {
+  border: 1px dashed var(--status-warning);
+  background: transparent;
+}
+
+.badge--forecast svg {
+  fill: var(--status-warning);
+}
+
+.equipment--forecast {
+  border-top: 3px dashed var(--status-warning);
+}
+
+.forecast-eta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.alarm--forecast {
+  border-left-style: dashed;
+  background: transparent;
+}
+
+.alarm__lead {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
 /* ---- 패널 공통 ---- */
 .panel__head {
   display: flex;
@@ -500,6 +531,12 @@ p {
 
 .link-button:hover {
   text-decoration: underline;
+}
+
+.link-button:disabled {
+  color: var(--muted);
+  cursor: default;
+  text-decoration: none;
 }
 
 .pulse {
@@ -746,6 +783,43 @@ p {
 .handover__item--on {
   border-color: var(--series-1);
   background: color-mix(in srgb, var(--series-1) 8%, transparent);
+}
+
+/* ---- AI 질의 ---- */
+.assistant__ask {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin: 8px 0;
+}
+
+.assistant__ask textarea {
+  flex: 1;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.assistant__examples {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.assistant__item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.assistant__item-label .chip {
+  margin-left: 0;
 }
 
 /* ---- 원인 선택지 ---- */

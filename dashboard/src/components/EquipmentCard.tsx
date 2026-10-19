@@ -1,4 +1,4 @@
-import type { Alarm, Rules } from '../api'
+import type { Alarm, Forecast, Rules } from '../api'
 import { displayUnit, METRIC_LABEL, type EquipmentInfo } from '../equipment'
 import { formatValue } from '../format'
 import { seriesKey, type SeriesMap } from '../useLiveData'
@@ -11,11 +11,21 @@ interface Props {
   units: Record<string, string | null>
   rules: Rules
   activeAlarms: Map<string, Alarm>
+  forecasts: Record<string, Forecast>
+  now: number
 }
 
-export function EquipmentCard({ equipment, series, units, rules, activeAlarms }: Props) {
-  const statusOf = (metric: string): Status =>
-    activeAlarms.get(seriesKey(equipment.id, metric))?.severity ?? 'NORMAL'
+/** 예측 경보 문구: "경고 기준 4.5 까지 약 25초" (화면이 etaAt 으로 직접 카운트다운) */
+export function forecastText(f: Forecast, now: number): string {
+  const seconds = Math.max(0, Math.round((Date.parse(f.etaAt) - now) / 1000))
+  return `기준 ${f.direction === 'HIGH' ? '≥' : '≤'} ${formatValue(f.limit)} 까지 약 ${seconds}초`
+}
+
+export function EquipmentCard({ equipment, series, units, rules, activeAlarms, forecasts, now }: Props) {
+  const statusOf = (metric: string): Status => {
+    const key = seriesKey(equipment.id, metric)
+    return activeAlarms.get(key)?.severity ?? (forecasts[key] ? 'FORECAST' : 'NORMAL')
+  }
   const cardStatus = worstStatus(equipment.metrics.map(statusOf))
 
   return (
@@ -37,11 +47,13 @@ export function EquipmentCard({ equipment, series, units, rules, activeAlarms }:
         const unit = displayUnit(units[key])
         const label = METRIC_LABEL[metric] ?? metric
         const status = statusOf(metric)
+        const forecast = status === 'FORECAST' ? forecasts[key] : undefined
         return (
           <div className="metric" key={metric}>
             <div className="metric__head">
               <span className="metric__label">{label}</span>
               {status !== 'NORMAL' && <StatusBadge status={status} compact />}
+              {forecast && <span className="forecast-eta">{forecastText(forecast, now)}</span>}
               <span className="metric__value">
                 {last ? formatValue(last.v) : '—'}
                 <small>{unit}</small>

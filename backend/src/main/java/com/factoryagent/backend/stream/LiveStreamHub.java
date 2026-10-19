@@ -1,6 +1,8 @@
 package com.factoryagent.backend.stream;
 
 import com.factoryagent.backend.alarm.AlarmEvent;
+import com.factoryagent.backend.assistant.AssistantEvent;
+import com.factoryagent.backend.forecast.ForecastEvent;
 import com.factoryagent.backend.handover.HandoverEvent;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.workorder.WorkOrderCreatedEvent;
@@ -15,13 +17,14 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 대시보드로 실시간 이벤트를 밀어주는 SSE 허브.
- * 이벤트 이름: readings / alarm / work-order / handover / ping
+ * 이벤트 이름: readings / alarm / forecast / work-order / handover / assistant / ping
  * 모두 커밋 이후에 보내 화면이 DB 와 어긋나지 않게 한다.
  */
 @Component
@@ -56,6 +59,23 @@ public class LiveStreamHub {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onWorkOrder(WorkOrderCreatedEvent e) {
         broadcast("work-order", e.workOrder());
+    }
+
+    /** 추세 예측 경보 발생·갱신·해제. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onForecast(ForecastEvent e) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("type", e.type());
+        data.put("forecast", e.forecast());
+        data.put("reason", e.reason());
+        data.put("leadSeconds", e.leadSeconds());
+        broadcast("forecast", data);
+    }
+
+    /** AI 작업(질의·매뉴얼 개선 제안) 요청·작성 완료. 화면은 id 로 덮어쓴다. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onAssistant(AssistantEvent e) {
+        broadcast("assistant", e.task());
     }
 
     /** 인수인계 리포트 요청·작성 완료. 화면은 id 로 덮어쓴다. */

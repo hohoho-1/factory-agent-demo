@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Alarm, WorkOrder } from './api'
+import { postJson, type AssistantTask } from './api'
 import { ActionStatsTable } from './components/ActionStatsTable'
+import { AssistantModal } from './components/AssistantModal'
 import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
 import { EquipmentCard } from './components/EquipmentCard'
@@ -55,6 +57,16 @@ export default function App() {
   const openWo = live.workOrders.find((w) => w.id === openWoId) ?? null
   const setOpenWo = (wo: WorkOrder) => setOpenWoId(wo.id)
   const [handoverOpen, setHandoverOpen] = useState(false)
+  const [assistantOpen, setAssistantOpen] = useState(false)
+  const [assistantId, setAssistantId] = useState<number | null>(null)
+
+  // 조치 이력 요약의 "개선 제안" → 요청하고 결과 창을 그 작업으로 연다
+  const requestProposal = async (equipmentId: string, metric: string) => {
+    const task = await postJson<AssistantTask>('/api/assistant/manual-proposals', { equipmentId, metric })
+    live.updateAssistant(task)
+    setAssistantId(task.id)
+    setAssistantOpen(true)
+  }
 
   const activeAlarms = useMemo(() => {
     const map = new Map<string, Alarm>()
@@ -94,6 +106,9 @@ export default function App() {
             <span className="conn__dot" />
             {live.connected ? '실시간 연결' : '연결 끊김'}
           </span>
+          <button className="button button--ghost" onClick={() => setAssistantOpen(true)}>
+            AI에게 질문
+          </button>
           <button className="button button--ghost" onClick={() => setHandoverOpen(true)}>
             교대 인수인계
           </button>
@@ -116,6 +131,8 @@ export default function App() {
               units={live.units}
               rules={live.rules}
               activeAlarms={activeAlarms}
+              forecasts={live.forecasts}
+              now={now}
             />
           ))}
         </div>
@@ -123,6 +140,7 @@ export default function App() {
         <aside className="side">
           <div className="side__inner">
             <AlarmPanel
+              forecasts={live.forecasts}
               alarms={live.alarms}
               workOrders={live.workOrders}
               series={live.series}
@@ -133,7 +151,7 @@ export default function App() {
           </div>
         </aside>
         <div className="full">
-          <ActionStatsTable refreshKey={statsKey} />
+          <ActionStatsTable refreshKey={statsKey} onPropose={requestProposal} />
         </div>
         <div className="full">
           <AlarmTable alarms={live.alarms} now={now} />
@@ -142,6 +160,16 @@ export default function App() {
 
       {openWo && (
         <WorkOrderModal workOrder={openWo} onUpdated={live.updateWorkOrder} onClose={() => setOpenWoId(null)} />
+      )}
+      {assistantOpen && (
+        <AssistantModal
+          tasks={live.assistantTasks}
+          now={now}
+          selectedId={assistantId}
+          onSelect={setAssistantId}
+          onCreated={live.updateAssistant}
+          onClose={() => setAssistantOpen(false)}
+        />
       )}
       {handoverOpen && (
         <HandoverModal
