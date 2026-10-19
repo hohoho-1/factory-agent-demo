@@ -3,13 +3,15 @@ import ReactMarkdown from 'react-markdown'
 import type { WorkOrder } from '../api'
 import { formatTime } from '../format'
 import { StatusBadge } from './StatusBadge'
+import { WorkOrderAction } from './WorkOrderAction'
 
 interface Props {
   workOrder: WorkOrder
+  onUpdated: (wo: WorkOrder) => void
   onClose: () => void
 }
 
-export function WorkOrderModal({ workOrder, onClose }: Props) {
+export function WorkOrderModal({ workOrder, onUpdated, onClose }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
     window.addEventListener('keydown', onKey)
@@ -60,6 +62,7 @@ export function WorkOrderModal({ workOrder, onClose }: Props) {
               ))}
             </tbody>
           </table>
+          <WorkOrderAction workOrder={workOrder} onUpdated={onUpdated} />
         </div>
       </div>
     </div>

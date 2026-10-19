@@ -66,6 +66,32 @@ public class WorkOrder {
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
+    // ---- 작업자 피드백 (컬럼 추가 전에 만든 행은 null 이라 nullable 로 두고 status 는 OPEN 으로 읽는다) ----
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private WorkOrderStatus status;
+
+    @Column(length = 64)
+    private String worker;
+
+    @Column(name = "acknowledged_at")
+    private Instant acknowledgedAt;
+
+    /** 작업자가 현장에서 확인한 실제 원인. */
+    @Column(name = "root_cause", length = 200)
+    private String rootCause;
+
+    @Column(name = "action_taken", columnDefinition = "text")
+    private String actionTaken;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 16)
+    private ActionOutcome outcome;
+
+    @Column(name = "completed_at")
+    private Instant completedAt;
+
     protected WorkOrder() {
     }
 
@@ -81,7 +107,32 @@ public class WorkOrder {
         w.references = req.references() == null ? List.of() : req.references();
         w.generator = req.generator() == null ? "unknown" : req.generator();
         w.createdAt = Instant.now();
+        w.status = WorkOrderStatus.OPEN;
         return w;
+    }
+
+    /** 작업자 확인. 이미 확인·완료된 지시서는 그대로 둔다. */
+    public boolean acknowledge(String worker, Instant at) {
+        if (getStatus() != WorkOrderStatus.OPEN) {
+            return false;
+        }
+        this.status = WorkOrderStatus.ACKNOWLEDGED;
+        this.worker = worker;
+        this.acknowledgedAt = at;
+        return true;
+    }
+
+    /** 조치 완료와 결과 입력. 확인 단계를 건너뛰었으면 확인 시각도 함께 채운다. */
+    public void complete(String worker, String rootCause, String actionTaken, ActionOutcome outcome, Instant at) {
+        if (acknowledgedAt == null) {
+            acknowledgedAt = at;
+        }
+        this.status = WorkOrderStatus.COMPLETED;
+        this.worker = worker;
+        this.rootCause = rootCause;
+        this.actionTaken = actionTaken;
+        this.outcome = outcome;
+        this.completedAt = at;
     }
 
     public Long getId() { return id; }
@@ -95,4 +146,11 @@ public class WorkOrder {
     public List<ReferenceDoc> getReferences() { return references; }
     public String getGenerator() { return generator; }
     public Instant getCreatedAt() { return createdAt; }
+    public WorkOrderStatus getStatus() { return status == null ? WorkOrderStatus.OPEN : status; }
+    public String getWorker() { return worker; }
+    public Instant getAcknowledgedAt() { return acknowledgedAt; }
+    public String getRootCause() { return rootCause; }
+    public String getActionTaken() { return actionTaken; }
+    public ActionOutcome getOutcome() { return outcome; }
+    public Instant getCompletedAt() { return completedAt; }
 }

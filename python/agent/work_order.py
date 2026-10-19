@@ -2,9 +2,12 @@
 알람 + 검색된 매뉴얼 → 조치 지시서.
 
 TemplateGenerator 는 LLM 없이 매뉴얼 섹션을 골라 조립한다 (심각도에 맞는 조치 섹션 선택).
-LLM 을 붙일 때는 같은 generate(alarm, index) 인터페이스로 생성기만 추가하면 된다.
+같은 설비·지표에서 작업자가 조치를 마친 기록(history)이 있으면 '과거 유사 조치 이력'으로 앞쪽에 넣는다.
+LLM 을 붙일 때는 같은 generate(alarm, index, history) 인터페이스로 생성기만 추가하면 된다.
 """
 from __future__ import annotations
+
+from datetime import datetime
 
 from .rag import Hit, ManualIndex
 
@@ -22,6 +25,9 @@ SYMPTOM_KEYWORDS = {
 
 ACTION_SECTION = {"WARNING": "조치 - 경고(WARNING)", "CRITICAL": "조치 - 위험(CRITICAL)"}
 
+SEVERITY_KO = {"WARNING": "경고", "CRITICAL": "위험"}
+OUTCOME_KO = {"RESOLVED": "해결", "PARTIAL": "부분 해결", "UNRESOLVED": "미해결"}
+
 
 def build_query(alarm: dict) -> str:
     eq = EQUIPMENT_KO.get(alarm["equipmentType"], alarm["equipmentType"])
@@ -34,10 +40,41 @@ def _fmt(v: float) -> str:
     return f"{v:.2f}".rstrip("0").rstrip(".")
 
 
+def _local_time(iso: str | None) -> str:
+    if not iso:
+        return "-"
+    return datetime.fromisoformat(iso).astimezone().strftime("%m/%d %H:%M")
+
+
+def history_section(history: list[dict]) -> list[str]:
+    """작업자가 남긴 조치 결과를 지시서 앞쪽에 붙일 마크다운 줄로 만든다. 이력이 없으면 빈 목록."""
+    if not history:
+        return []
+    lines = [
+        f"## 과거 유사 조치 이력 ({len(history)}건)",
+        "같은 설비·지표에서 작업자가 조치를 마친 기록입니다. 매뉴얼 절차와 함께 참고하세요.",
+        "",
+    ]
+    resolved = next((h for h in history if h.get("outcome") == "RESOLVED" and h.get("rootCause")), None)
+    if resolved:
+        lines.append(f"> **우선 확인**: 지난번 해결된 원인 '{resolved['rootCause']}'"
+                     f" (WO-{resolved['id']}, {_local_time(resolved.get('completedAt'))})")
+        lines.append("")
+    for h in history:
+        lines.append(
+            f"- {_local_time(h.get('completedAt'))} · WO-{h['id']} ({SEVERITY_KO.get(h['severity'], h['severity'])})"
+            f" · **{OUTCOME_KO.get(h.get('outcome'), h.get('outcome') or '-')}** · {h.get('worker') or '-'}"
+            f" — 원인: {h.get('rootCause') or '미확인'} / 조치: {h.get('actionTaken') or '-'}"
+        )
+    lines.append("")
+    return lines
+
+
 class TemplateGenerator:
     name = "template"
 
-    def generate(self, alarm: dict, index: ManualIndex) -> dict:
+    def generate(self, alarm: dict, index: ManualIndex, history: list[dict] | None = None) -> dict:
+        history = history or []
         query = build_query(alarm)
         hits = index.search(query, alarm["equipmentType"], alarm["metric"], k=6)
         manual = index.best_manual(hits)
@@ -58,6 +95,8 @@ class TemplateGenerator:
         summary = (f"{alarm['equipmentId']}({eq_ko}) {metric_ko} {_fmt(alarm['lastValue'])}{unit}, "
                    f"기준 {op} {_fmt(alarm['thresholdValue'])}{unit} ({severity}). "
                    f"{manual.id} 기준으로 조치 바랍니다.")
+        if history:
+            summary += f" 과거 유사 조치 {len(history)}건 참고."
 
         body = "\n".join([
             f"# {title}",
@@ -70,6 +109,7 @@ class TemplateGenerator:
             f"- 최초 발생: {alarm['raisedAt']}",
             f"- 근거 매뉴얼: {manual.id} {manual.title}",
             "",
+            *history_section(history),
             "## 추정 원인",
             section("가능 원인"),
             "",

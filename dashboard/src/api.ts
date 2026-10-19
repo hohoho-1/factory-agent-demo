@@ -49,6 +49,23 @@ export interface WorkOrder {
   references: ReferenceDoc[]
   generator: string
   createdAt: string
+  status: WorkOrderStatus
+  worker: string | null
+  acknowledgedAt: string | null
+  rootCause: string | null
+  actionTaken: string | null
+  outcome: ActionOutcome | null
+  completedAt: string | null
+}
+
+export type WorkOrderStatus = 'OPEN' | 'ACKNOWLEDGED' | 'COMPLETED'
+export type ActionOutcome = 'RESOLVED' | 'PARTIAL' | 'UNRESOLVED'
+
+export interface ActionResult {
+  worker: string
+  rootCause: string
+  actionTaken: string
+  outcome: ActionOutcome
 }
 
 export interface Threshold {
@@ -68,6 +85,18 @@ export interface AlarmEventMessage {
 
 export async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(path)
+  if (!res.ok) {
+    throw new Error(`${path} → HTTP ${res.status}`)
+  }
+  return res.json() as Promise<T>
+}
+
+export async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
   if (!res.ok) {
     throw new Error(`${path} → HTTP ${res.status}`)
   }

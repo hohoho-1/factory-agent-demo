@@ -15,6 +15,7 @@ import argparse
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import paho.mqtt.client as mqtt
@@ -31,6 +32,16 @@ class Backend:
 
     def get_alarm(self, alarm_id: int) -> dict:
         with urllib.request.urlopen(f"{self.base_url}/api/alarms/{alarm_id}", timeout=5) as r:
+            return json.load(r)
+
+    def get_history(self, alarm: dict) -> list[dict]:
+        """같은 설비·지표에서 작업자가 조치를 마친 과거 지시서 (최근 완료 순)."""
+        query = urllib.parse.urlencode({
+            "equipmentId": alarm["equipmentId"],
+            "metric": alarm["metric"],
+            "excludeAlarmId": alarm["id"],
+        })
+        with urllib.request.urlopen(f"{self.base_url}/api/work-orders/history?{query}", timeout=5) as r:
             return json.load(r)
 
     def save_work_order(self, alarm_id: int, work_order: dict) -> dict:
@@ -52,15 +63,26 @@ class Agent:
         self.dry_run = dry_run
 
     def handle(self, alarm: dict, event: str) -> None:
-        wo = self.generator.generate(alarm, self.index)
+        history = self._history(alarm)
+        wo = self.generator.generate(alarm, self.index, history)
         top = wo["references"][0]
         print(f"[AGENT] {event} alarm #{alarm['id']} {alarm['message']}")
         print(f"        -> {top['manualId']} / {top['section']} (score {top['score']})")
+        if history:
+            print(f"        -> past actions: {len(history)} (latest WO-{history[0]['id']})")
         if self.dry_run:
             print(wo["body"])
             return
         saved = self.backend.save_work_order(alarm["id"], wo)
         print(f"        -> work order #{saved['id']} saved: {saved['title']}")
+
+    def _history(self, alarm: dict) -> list[dict]:
+        # 이력 조회가 안 돼도 매뉴얼 기반 지시서는 써야 한다
+        try:
+            return self.backend.get_history(alarm)
+        except (urllib.error.URLError, ValueError) as e:
+            print(f"[AGENT] history lookup failed, continuing without it: {e!r}", file=sys.stderr)
+            return []
 
 
 def run_mqtt(agent: Agent, host: str, port: int, topic: str) -> None:

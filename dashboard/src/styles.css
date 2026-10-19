@@ -644,3 +644,155 @@ p {
 .markdown p {
   margin: 4px 0;
 }
+
+/* 과거 유사 조치 이력의 '우선 확인' 줄 */
+.markdown blockquote {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border-left: 3px solid var(--series-1);
+  background: color-mix(in srgb, var(--series-1) 8%, transparent);
+  border-radius: 0 6px 6px 0;
+}
+
+/* ---- 지시서 처리 상태 ---- */
+.chip {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.chip--open {
+  color: var(--link);
+  border-color: color-mix(in srgb, var(--link) 40%, transparent);
+}
+
+.chip--completed {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--status-good) 14%, transparent);
+  border-color: transparent;
+}
+
+/* ---- 작업자 조치 입력 ---- */
+.action {
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--series-1) 4%, transparent);
+}
+
+.action h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+}
+
+.action--done {
+  background: color-mix(in srgb, var(--status-good) 6%, transparent);
+}
+
+.action__hint {
+  margin: 4px 0 10px;
+  font-size: 12px;
+}
+
+.action__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.action__row--end {
+  justify-content: flex-end;
+}
+
+.action__result {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.action__result dt {
+  color: var(--text-secondary);
+}
+
+.action__result dd {
+  margin: 0;
+}
+
+.action__text {
+  white-space: pre-wrap;
+}
+
+.action__error {
+  margin-top: 8px;
+  color: var(--status-critical);
+  font-size: 13px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.field > span {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.field input,
+.field textarea {
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+  border: none;
+  padding: 0;
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.button {
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: none;
+  background: var(--series-1);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

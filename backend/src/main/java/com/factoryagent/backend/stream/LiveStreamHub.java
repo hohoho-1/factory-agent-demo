@@ -3,6 +3,7 @@ package com.factoryagent.backend.stream;
 import com.factoryagent.backend.alarm.AlarmEvent;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.workorder.WorkOrderCreatedEvent;
+import com.factoryagent.backend.workorder.WorkOrderUpdatedEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -53,6 +54,12 @@ public class LiveStreamHub {
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onWorkOrder(WorkOrderCreatedEvent e) {
+        broadcast("work-order", e.workOrder());
+    }
+
+    /** 확인·조치 완료도 같은 이벤트로 보낸다. 화면은 id 로 덮어쓴다. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onWorkOrderUpdated(WorkOrderUpdatedEvent e) {
         broadcast("work-order", e.workOrder());
     }
 

@@ -1,6 +1,7 @@
-import type { WorkOrder } from '../api'
+import type { WorkOrder, WorkOrderStatus } from '../api'
 import { formatTime } from '../format'
 import { StatusBadge } from './StatusBadge'
+import { OUTCOME_LABEL } from './WorkOrderAction'
 
 interface Props {
   workOrders: WorkOrder[]
@@ -8,6 +9,13 @@ interface Props {
 }
 
 const GENERATOR_LABEL: Record<string, string> = { template: '매뉴얼 템플릿', llm: 'LLM' }
+
+const STATUS_LABEL: Record<WorkOrderStatus, string> = { OPEN: '미확인', ACKNOWLEDGED: '조치 중', COMPLETED: '완료' }
+
+function statusText(wo: WorkOrder): string {
+  if (wo.status === 'COMPLETED' && wo.outcome) return `완료 · ${OUTCOME_LABEL[wo.outcome]}`
+  return STATUS_LABEL[wo.status]
+}
 
 export function WorkOrderPanel({ workOrders, onOpen }: Props) {
   return (
@@ -26,6 +34,7 @@ export function WorkOrderPanel({ workOrders, onOpen }: Props) {
                 <div className="wo__top">
                   <StatusBadge status={wo.severity} compact />
                   <span className="wo__title">{wo.title.replace(/^\[\w+\]\s*/, '')}</span>
+                  <span className={`chip chip--${wo.status.toLowerCase()}`}>{statusText(wo)}</span>
                 </div>
                 {wo.summary && <p className="wo__summary">{wo.summary}</p>}
                 <div className="wo__meta muted">

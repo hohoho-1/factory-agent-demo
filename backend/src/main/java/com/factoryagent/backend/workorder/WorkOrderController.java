@@ -11,8 +11,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -57,5 +59,56 @@ public class WorkOrderController {
     @GetMapping("/api/work-orders")
     public List<WorkOrder> recent() {
         return repository.findTop50ByOrderByCreatedAtDesc();
+    }
+
+    /** 과거 유사 조치 이력: 같은 설비·지표에서 작업자가 조치를 마친 지시서. 에이전트가 새 지시서에 넣는다. */
+    @GetMapping("/api/work-orders/history")
+    public List<WorkOrder> history(@RequestParam String equipmentId, @RequestParam String metric,
+                                   @RequestParam(defaultValue = "-1") Long excludeAlarmId) {
+        return repository.findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(
+                equipmentId, metric, WorkOrderStatus.COMPLETED, excludeAlarmId);
+    }
+
+    /** 작업자가 지시서를 확인했다. */
+    @PostMapping("/api/work-orders/{id}/acknowledge")
+    public ResponseEntity<WorkOrder> acknowledge(@PathVariable Long id,
+                                                 @RequestBody(required = false) AcknowledgeRequest req) {
+        Optional<WorkOrder> found = repository.findById(id);
+        if (found.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        WorkOrder wo = found.get();
+        if (wo.acknowledge(workerOrDefault(req == null ? null : req.worker()), Instant.now())) {
+            wo = repository.save(wo);
+            log.info("[WORK ORDER] #{} acknowledged by {}", id, wo.getWorker());
+            events.publishEvent(new WorkOrderUpdatedEvent(wo));
+        }
+        return ResponseEntity.ok(wo);
+    }
+
+    /** 조치 완료와 결과 입력. 조치 내용과 결과는 필수. */
+    @PostMapping("/api/work-orders/{id}/complete")
+    public ResponseEntity<WorkOrder> complete(@PathVariable Long id, @RequestBody ActionResultRequest req) {
+        if (req.outcome() == null || req.actionTaken() == null || req.actionTaken().isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        Optional<WorkOrder> found = repository.findById(id);
+        if (found.isEmpty()) {
+            return ResponseEntity.notFound().build();
+        }
+        WorkOrder wo = found.get();
+        if (wo.getStatus() == WorkOrderStatus.COMPLETED) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(wo);
+        }
+        String cause = req.rootCause() == null || req.rootCause().isBlank() ? null : req.rootCause().trim();
+        wo.complete(workerOrDefault(req.worker()), cause, req.actionTaken().trim(), req.outcome(), Instant.now());
+        wo = repository.save(wo);
+        log.info("[WORK ORDER] #{} completed by {} ({}): {}", id, wo.getWorker(), wo.getOutcome(), wo.getActionTaken());
+        events.publishEvent(new WorkOrderUpdatedEvent(wo));
+        return ResponseEntity.ok(wo);
+    }
+
+    private static String workerOrDefault(String worker) {
+        return worker == null || worker.isBlank() ? "현장 작업자" : worker.trim();
     }
 }

@@ -48,7 +48,10 @@ export default function App() {
   const live = useLiveData()
   const now = useNow(1000)
   const [, toggleTheme] = useTheme()
-  const [openWo, setOpenWo] = useState<WorkOrder | null>(null)
+  // id 만 들고 있다가 목록에서 찾는다: 확인·조치 완료가 반영된 최신 상태를 모달에 보여 주기 위해
+  const [openWoId, setOpenWoId] = useState<number | null>(null)
+  const openWo = live.workOrders.find((w) => w.id === openWoId) ?? null
+  const setOpenWo = (wo: WorkOrder) => setOpenWoId(wo.id)
 
   const activeAlarms = useMemo(() => {
     const map = new Map<string, Alarm>()
@@ -121,7 +124,9 @@ export default function App() {
         </div>
       </main>
 
-      {openWo && <WorkOrderModal workOrder={openWo} onClose={() => setOpenWo(null)} />}
+      {openWo && (
+        <WorkOrderModal workOrder={openWo} onUpdated={live.updateWorkOrder} onClose={() => setOpenWoId(null)} />
+      )}
     </div>
   )
 }

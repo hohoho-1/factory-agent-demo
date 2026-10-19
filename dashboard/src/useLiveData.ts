@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'react'
+import { useCallback, useEffect, useReducer } from 'react'
 import { getJson, type Alarm, type AlarmEventMessage, type Reading, type Rules, type WorkOrder } from './api'
 
 /** 차트에 보여 줄 시간 창 */
@@ -101,7 +101,13 @@ function reducer(state: LiveState, action: Action): LiveState {
     case 'alarm':
       return { ...state, alarms: upsertAlarm(state.alarms, action.alarm) }
     case 'workOrder':
-      if (state.workOrders.some((w) => w.id === action.workOrder.id)) return state
+      // 확인·조치 완료는 같은 id 로 다시 오므로 제자리에서 바꾼다
+      if (state.workOrders.some((w) => w.id === action.workOrder.id)) {
+        return {
+          ...state,
+          workOrders: state.workOrders.map((w) => (w.id === action.workOrder.id ? action.workOrder : w)),
+        }
+      }
       return { ...state, workOrders: [action.workOrder, ...state.workOrders].slice(0, MAX_WORK_ORDERS) }
     case 'connection':
       return { ...state, connected: action.connected }
@@ -114,8 +120,10 @@ function reducer(state: LiveState, action: Action): LiveState {
  * 초기 상태는 REST 로 한 번 읽고, 이후 변화는 SSE(/api/stream)로 받는다.
  * 연결이 끊겼다 다시 붙으면 놓친 알람·지시서를 맞추기 위해 REST 를 다시 읽는다.
  */
-export function useLiveData(): LiveState {
+export function useLiveData(): LiveState & { updateWorkOrder: (wo: WorkOrder) => void } {
   const [state, dispatch] = useReducer(reducer, initialState)
+  // POST 응답을 바로 반영한다 (SSE 로도 같은 값이 오지만 기다리지 않게)
+  const updateWorkOrder = useCallback((workOrder: WorkOrder) => dispatch({ type: 'workOrder', workOrder }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -163,5 +171,5 @@ export function useLiveData(): LiveState {
     }
   }, [])
 
-  return state
+  return { ...state, updateWorkOrder }
 }
