@@ -10,6 +10,8 @@ public interface WorkOrderRepository extends JpaRepository<WorkOrder, Long> {
 
     List<WorkOrder> findTop50ByOrderByCreatedAtDesc();
 
+    List<WorkOrder> findByStatus(WorkOrderStatus status);
+
     /** 같은 설비·지표에서 조치가 끝난 지시서 (현재 알람 것은 제외), 최근 완료 순 5건. */
     List<WorkOrder> findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(
             String equipmentId, String metric, WorkOrderStatus status, Long excludeAlarmId);

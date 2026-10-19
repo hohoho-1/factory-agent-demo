@@ -678,6 +678,20 @@ p {
   border-color: transparent;
 }
 
+/* ---- 조치 이력 요약 ---- */
+.stats__causes {
+  white-space: normal;
+}
+
+.cause {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--grid);
+  font-size: 12px;
+}
+
 /* ---- 작업자 조치 입력 ---- */
 .action {
   margin-top: 20px;

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { Alarm, WorkOrder } from './api'
+import { ActionStatsTable } from './components/ActionStatsTable'
 import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
 import { EquipmentCard } from './components/EquipmentCard'
@@ -61,6 +62,13 @@ export default function App() {
     return map
   }, [live.alarms])
 
+  // 알람 발생·상승·해제나 조치 완료가 있을 때만 요약을 다시 읽는다 (측정값 갱신마다 읽지 않게)
+  const statsKey = useMemo(() => {
+    const alarmPart = live.alarms.map((a) => `${a.id}${a.severity[0]}${a.status[0]}`).join(',')
+    const donePart = live.workOrders.filter((w) => w.status === 'COMPLETED').map((w) => w.id).join(',')
+    return `${alarmPart}|${donePart}`
+  }, [live.alarms, live.workOrders])
+
   const critical = [...activeAlarms.values()].filter((a) => a.severity === 'CRITICAL').length
   const warning = activeAlarms.size - critical
 
@@ -119,6 +127,9 @@ export default function App() {
             <WorkOrderPanel workOrders={live.workOrders} onOpen={setOpenWo} />
           </div>
         </aside>
+        <div className="full">
+          <ActionStatsTable refreshKey={statsKey} />
+        </div>
         <div className="full">
           <AlarmTable alarms={live.alarms} now={now} />
         </div>

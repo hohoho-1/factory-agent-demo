@@ -68,6 +68,18 @@ export interface ActionResult {
   outcome: ActionOutcome
 }
 
+export interface ActionStats {
+  equipmentId: string
+  metric: string
+  alarmCount: number
+  criticalCount: number
+  lastRaisedAt: string | null
+  completedCount: number
+  resolvedCount: number
+  avgHandleMinutes: number | null
+  topCauses: { cause: string; count: number }[]
+}
+
 export interface Threshold {
   warnHigh: number | null
   critHigh: number | null
