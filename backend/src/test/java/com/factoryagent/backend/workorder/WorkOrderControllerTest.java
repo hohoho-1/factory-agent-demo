@@ -81,6 +81,18 @@ class WorkOrderControllerTest {
     }
 
     @Test
+    void completeWithBlankWorkerKeepsAcknowledgingWorker() {
+        WorkOrder w = workOrder(10, alarm);
+        w.acknowledge("홍길동", java.time.Instant.now());
+        when(repository.findById(10L)).thenReturn(Optional.of(w));
+        when(repository.findByAlarmIdOrderByCreatedAtDesc(1L)).thenReturn(List.of(w));
+
+        controller.complete(10L, new ActionResultRequest(" ", null, "조치", ActionOutcome.RESOLVED));
+
+        assertThat(w.getWorker()).isEqualTo("홍길동");
+    }
+
+    @Test
     void blankWorkerBecomesDefault() {
         WorkOrder w = workOrder(10, alarm);
         when(repository.findById(10L)).thenReturn(Optional.of(w));

@@ -726,6 +726,11 @@ p {
   font-weight: 600;
 }
 
+.field__suggest {
+  align-self: flex-start;
+  font-weight: 500;
+}
+
 .cause-options + input {
   margin-top: 6px;
 }

@@ -42,8 +42,11 @@ function saveWorker(worker: string) {
  */
 export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) {
   // 마지막으로 저장된 작업자 이름: 이 값에서 바뀌었으면 저장 안 된 입력으로 본다
-  const [initialWorker, setInitialWorker] = useState(loadWorker)
-  const [worker, setWorker] = useState(initialWorker)
+  // 이름은 미리 채우지 않는다: 태블릿을 여럿이 쓰면 앞 사람 이름으로 기록될 수 있어서.
+  // 이 브라우저에서 마지막으로 쓴 이름은 한 번에 넣을 수 있는 버튼으로만 보여 준다.
+  const [lastWorker, setLastWorker] = useState(loadWorker)
+  const [initialWorker, setInitialWorker] = useState('')
+  const [worker, setWorker] = useState('')
   const [rootCause, setRootCause] = useState('')
   // 선택지에 없는 원인을 직접 쓰는 중인지 (선택지가 없는 예전 지시서는 항상 직접 입력)
   const [otherCause, setOtherCause] = useState(false)
@@ -62,7 +65,10 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
     setError(null)
     try {
       const updated = await postJson<WorkOrder>(path, body)
-      saveWorker(worker.trim())
+      if (worker.trim()) {
+        saveWorker(worker.trim())
+        setLastWorker(worker.trim())
+      }
       setInitialWorker(worker)
       onUpdated(updated)
     } catch (e) {
@@ -134,7 +140,20 @@ export function WorkOrderAction({ workOrder, onUpdated, onDirtyChange }: Props) 
       <h2>작업자 조치</h2>
       <label className="field">
         <span>작업자</span>
-        <input value={worker} onChange={(e) => setWorker(e.target.value)} placeholder="이름 (비우면 '현장 작업자')" />
+        <input
+          value={worker}
+          onChange={(e) => setWorker(e.target.value)}
+          placeholder={
+            workOrder.status === 'ACKNOWLEDGED' && workOrder.worker
+              ? `이름 (비우면 확인한 작업자 '${workOrder.worker}')`
+              : "이름 (비우면 '현장 작업자')"
+          }
+        />
+        {lastWorker && worker.trim() !== lastWorker && (
+          <button type="button" className="link-button field__suggest" onClick={() => setWorker(lastWorker)}>
+            {lastWorker}(으)로 입력
+          </button>
+        )}
       </label>
 
       {workOrder.status === 'OPEN' ? (

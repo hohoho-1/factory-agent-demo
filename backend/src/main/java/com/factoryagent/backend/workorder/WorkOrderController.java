@@ -119,7 +119,9 @@ public class WorkOrderController {
         }
         Instant now = Instant.now();
         String cause = req.rootCause() == null || req.rootCause().isBlank() ? null : req.rootCause().trim();
-        wo.complete(workerOrDefault(req.worker()), cause, req.actionTaken().trim(), req.outcome(), now);
+        // 이름을 비워 보내면 지시서를 확인한 작업자를 그대로 둔다
+        String worker = isBlank(req.worker()) && wo.getWorker() != null ? wo.getWorker() : workerOrDefault(req.worker());
+        wo.complete(worker, cause, req.actionTaken().trim(), req.outcome(), now);
         wo = repository.save(wo);
         log.info("[WORK ORDER] #{} completed by {} ({}): {}", id, wo.getWorker(), wo.getOutcome(), wo.getActionTaken());
         events.publishEvent(new WorkOrderUpdatedEvent(wo));
@@ -134,7 +136,11 @@ public class WorkOrderController {
         return ResponseEntity.ok(wo);
     }
 
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
     private static String workerOrDefault(String worker) {
-        return worker == null || worker.isBlank() ? "현장 작업자" : worker.trim();
+        return isBlank(worker) ? "현장 작업자" : worker.trim();
     }
 }
