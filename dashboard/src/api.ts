@@ -73,6 +73,20 @@ export interface ActionResult {
   outcome: ActionOutcome
 }
 
+/** 교대 인수인계 리포트. PENDING 이면 에이전트가 작성 중 */
+export interface HandoverReport {
+  id: number
+  windowFrom: string
+  windowTo: string
+  status: 'PENDING' | 'DONE'
+  requestedBy: string | null
+  generator: string | null
+  title: string | null
+  body: string | null
+  createdAt: string
+  completedAt: string | null
+}
+
 export interface ActionStats {
   equipmentId: string
   metric: string

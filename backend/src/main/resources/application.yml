@@ -30,6 +30,7 @@ app:
     client-id: factory-backend
     topic: factory/line1/+/telemetry
     alarm-topic: factory/line1/alarms
+    handover-topic: factory/line1/handover/requests
   # 설비 유형 → 지표 → 임계값 (warn/crit × high/low, 필요한 것만)
   # 정상 운전값: 탱크 레벨 65~70%, 온도 25~40C / 배합기 진동 2.5mm/s, 전류 12A / 충진기 120bpm
   alarm:

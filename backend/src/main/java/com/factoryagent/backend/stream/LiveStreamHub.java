@@ -1,6 +1,7 @@
 package com.factoryagent.backend.stream;
 
 import com.factoryagent.backend.alarm.AlarmEvent;
+import com.factoryagent.backend.handover.HandoverEvent;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.workorder.WorkOrderCreatedEvent;
 import com.factoryagent.backend.workorder.WorkOrderUpdatedEvent;
@@ -20,7 +21,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 대시보드로 실시간 이벤트를 밀어주는 SSE 허브.
- * 이벤트 이름: readings / alarm / work-order / ping
+ * 이벤트 이름: readings / alarm / work-order / handover / ping
  * 모두 커밋 이후에 보내 화면이 DB 와 어긋나지 않게 한다.
  */
 @Component
@@ -55,6 +56,12 @@ public class LiveStreamHub {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onWorkOrder(WorkOrderCreatedEvent e) {
         broadcast("work-order", e.workOrder());
+    }
+
+    /** 인수인계 리포트 요청·작성 완료. 화면은 id 로 덮어쓴다. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onHandover(HandoverEvent e) {
+        broadcast("handover", e.report());
     }
 
     /** 확인·조치 완료도 같은 이벤트로 보낸다. 화면은 id 로 덮어쓴다. */

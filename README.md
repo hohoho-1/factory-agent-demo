@@ -60,6 +60,7 @@ flowchart LR
 7. **작업자 피드백** — 작업자가 대시보드에서 지시서를 **확인**하고, 점검이 끝나면 확인한 원인 · 조치 내용 · 결과(해결/부분 해결/미해결)를 입력한다. 원인은 근거 매뉴얼의 "가능 원인"에서 고르고(없으면 기타에 직접 입력), 같은 이름으로 저장돼 통계에서 흩어지지 않는다. 한 알람에서 경고 · 위험 지시서가 따로 나왔어도 하나만 완료하면 나머지는 "함께 처리"로 닫힌다.
 8. **다음 지시서에 반영** — 같은 설비 · 지표에 다시 이상이 생기면 에이전트가 완료된 조치 기록을 조회해 지시서 앞쪽에 **과거 유사 조치 이력**을 넣는다. 지난번에 해결된 원인은 "우선 확인"으로 강조한다. 같은 유형의 다른 설비(TANK-01 ↔ TANK-02) 기록도 따로 묶어 "참고"로 보여 준다.
 9. **조치 이력 요약** — 대시보드 하단 표에 설비 · 지표별 이상 횟수, 해결률, 평균 처리 시간, 작업자가 입력한 주요 원인이 쌓인다. 기록이 늘수록 반복 고장 설비와 원인이 드러난다.
+10. **교대 인수인계 리포트** — 상단 **교대 인수인계** 버튼으로 최근 1 · 8 · 24시간 리포트를 요청하면, 에이전트가 그 시간대 알람 · 조치를 읽어 요약 → 주요 이상과 조치 → 다음 교대가 이어서 할 일 → 주의해서 볼 설비 순으로 쓴다. 집계 숫자는 코드가 세고, Claude는 알람 · 지시서 번호를 근거로 문장만 쓴다 (번호 검증 실패 시 템플릿).
 
 ![AI 조치 지시서](docs/images/work-order.png)
 
@@ -86,6 +87,7 @@ factory-agent-demo/
 │       ├── rag.py                   # 매뉴얼 청킹 · TF-IDF 검색
 │       ├── work_order.py            # 템플릿 지시서 생성기 (키가 없거나 LLM 실패 시)
 │       ├── llm.py                   # Claude 지시서 생성기 (근거 번호 인용 · 검증)
+│       ├── handover.py              # 교대 인수인계 리포트 (Claude · 템플릿)
 │       └── manuals/*.md             # 가상 설비 매뉴얼 7종
 ├── backend/                         # Spring Boot
 │   └── src/main/java/com/factoryagent/backend/
@@ -93,6 +95,7 @@ factory-agent-demo/
 │       ├── telemetry/               # 측정값 저장 · 조회
 │       ├── alarm/                   # 임계값 규칙 · 알람 발생/상승/해제
 │       ├── workorder/               # 조치 지시서 저장 · 조회 · 작업자 확인 · 조치 결과
+│       ├── handover/                # 교대 인수인계 리포트 요청 · 재료 · 결과
 │       └── stream/                  # 대시보드용 SSE
 ├── dashboard/                       # React 관제 화면
 ├── scripts/                         # 데모 실행 · 이상 주입 · 종료
@@ -194,6 +197,7 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 |---|---|---|
 | `factory/line1/{설비ID}/telemetry` | 센서 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` |
 | `factory/line1/alarms` | 백엔드 → 에이전트 | `{"event":"RAISED"\|"ESCALATED"\|"CLEARED","alarm":{...}}` |
+| `factory/line1/handover/requests` | 백엔드 → 에이전트 | `{"reportId","from","to"}` 인수인계 리포트 작성 요청 |
 | `factory/line1/sim/anomaly` | 데모 조작 → 센서 | 시나리오 이름 (예: `mixer_vibration`) |
 
 ## REST API
@@ -212,7 +216,11 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 | `POST /api/work-orders/{id}/complete` | 조치 완료 · 결과 입력 `{"worker","rootCause","actionTaken","outcome"}` |
 | `GET /api/work-orders/history?equipmentId=&metric=&equipmentType=` | 같은 설비 · 지표의 완료된 조치 최근 5건 + 같은 유형 다른 설비 3건 (에이전트가 호출) |
 | `GET /api/action-stats` | 설비 · 지표별 이상 횟수, 조치 완료 · 해결률, 평균 처리 시간, 주요 원인 |
-| `GET /api/stream` | SSE: `readings` · `alarm` · `work-order` · `ping` |
+| `POST /api/handover-reports` | 인수인계 리포트 요청 `{"hours"}` (1~24, 기본 8) → PENDING |
+| `GET /api/handover-reports` | 최근 리포트 10건 |
+| `GET /api/handover-reports/{id}/context` | 리포트 재료: 시간대 알람 · 지시서 요약 (에이전트가 호출) |
+| `POST /api/handover-reports/{id}/result` | 작성된 리포트 저장 → DONE (에이전트가 호출) |
+| `GET /api/stream` | SSE: `readings` · `alarm` · `work-order` · `handover` · `ping` |
 
 ## 설계 포인트
 

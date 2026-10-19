@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useReducer } from 'react'
-import { getJson, type Alarm, type AlarmEventMessage, type Reading, type Rules, type WorkOrder } from './api'
+import {
+  getJson,
+  type Alarm,
+  type AlarmEventMessage,
+  type HandoverReport,
+  type Reading,
+  type Rules,
+  type WorkOrder,
+} from './api'
 
 /** 차트에 보여 줄 시간 창 */
 export const WINDOW_MS = 5 * 60 * 1000
 const MAX_ALARMS = 50
 const MAX_WORK_ORDERS = 50
+const MAX_HANDOVERS = 10
 
 export interface Point {
   t: number
@@ -20,6 +29,7 @@ export interface LiveState {
   units: Record<string, string | null>
   alarms: Alarm[]
   workOrders: WorkOrder[]
+  handovers: HandoverReport[]
   rules: Rules
   connected: boolean
   loaded: boolean
@@ -27,10 +37,18 @@ export interface LiveState {
 }
 
 type Action =
-  | { type: 'snapshot'; readings: Reading[]; alarms: Alarm[]; workOrders: WorkOrder[]; rules: Rules }
+  | {
+      type: 'snapshot'
+      readings: Reading[]
+      alarms: Alarm[]
+      workOrders: WorkOrder[]
+      handovers: HandoverReport[]
+      rules: Rules
+    }
   | { type: 'readings'; readings: Reading[] }
   | { type: 'alarm'; alarm: Alarm }
   | { type: 'workOrder'; workOrder: WorkOrder }
+  | { type: 'handover'; report: HandoverReport }
   | { type: 'connection'; connected: boolean }
   | { type: 'error'; message: string }
 
@@ -39,6 +57,7 @@ const initialState: LiveState = {
   units: {},
   alarms: [],
   workOrders: [],
+  handovers: [],
   rules: {},
   connected: false,
   loaded: false,
@@ -92,6 +111,7 @@ function reducer(state: LiveState, action: Action): LiveState {
         ...appendReadings({}, {}, action.readings),
         alarms: action.alarms,
         workOrders: action.workOrders,
+        handovers: action.handovers,
         rules: action.rules,
         loaded: true,
         error: null,
@@ -109,6 +129,14 @@ function reducer(state: LiveState, action: Action): LiveState {
         }
       }
       return { ...state, workOrders: [action.workOrder, ...state.workOrders].slice(0, MAX_WORK_ORDERS) }
+    case 'handover': {
+      // 요청(PENDING)과 작성 완료(DONE)가 같은 id 로 온다. 최근 요청 순, 10건까지
+      const rest = state.handovers.filter((h) => h.id !== action.report.id)
+      const handovers = [action.report, ...rest]
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(0, MAX_HANDOVERS)
+      return { ...state, handovers }
+    }
     case 'connection':
       return { ...state, connected: action.connected }
     case 'error':
@@ -120,10 +148,14 @@ function reducer(state: LiveState, action: Action): LiveState {
  * 초기 상태는 REST 로 한 번 읽고, 이후 변화는 SSE(/api/stream)로 받는다.
  * 연결이 끊겼다 다시 붙으면 놓친 알람·지시서를 맞추기 위해 REST 를 다시 읽는다.
  */
-export function useLiveData(): LiveState & { updateWorkOrder: (wo: WorkOrder) => void } {
+export function useLiveData(): LiveState & {
+  updateWorkOrder: (wo: WorkOrder) => void
+  updateHandover: (report: HandoverReport) => void
+} {
   const [state, dispatch] = useReducer(reducer, initialState)
   // POST 응답을 바로 반영한다 (SSE 로도 같은 값이 오지만 기다리지 않게)
   const updateWorkOrder = useCallback((workOrder: WorkOrder) => dispatch({ type: 'workOrder', workOrder }), [])
+  const updateHandover = useCallback((report: HandoverReport) => dispatch({ type: 'handover', report }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -132,13 +164,14 @@ export function useLiveData(): LiveState & { updateWorkOrder: (wo: WorkOrder) =>
 
     const loadSnapshot = async () => {
       try {
-        const [readings, alarms, workOrders, rules] = await Promise.all([
+        const [readings, alarms, workOrders, handovers, rules] = await Promise.all([
           getJson<Reading[]>(`/api/readings/history?minutes=${WINDOW_MS / 60000}`),
           getJson<Alarm[]>('/api/alarms'),
           getJson<WorkOrder[]>('/api/work-orders'),
+          getJson<HandoverReport[]>('/api/handover-reports'),
           getJson<Rules>('/api/alarm-rules'),
         ])
-        if (!cancelled) dispatch({ type: 'snapshot', readings, alarms, workOrders, rules })
+        if (!cancelled) dispatch({ type: 'snapshot', readings, alarms, workOrders, handovers, rules })
       } catch (e) {
         if (!cancelled) dispatch({ type: 'error', message: e instanceof Error ? e.message : String(e) })
       }
@@ -163,6 +196,7 @@ export function useLiveData(): LiveState & { updateWorkOrder: (wo: WorkOrder) =>
       source.addEventListener('readings', (e) => dispatch({ type: 'readings', readings: parse<Reading[]>(e) }))
       source.addEventListener('alarm', (e) => dispatch({ type: 'alarm', alarm: parse<AlarmEventMessage>(e).alarm }))
       source.addEventListener('work-order', (e) => dispatch({ type: 'workOrder', workOrder: parse<WorkOrder>(e) }))
+      source.addEventListener('handover', (e) => dispatch({ type: 'handover', report: parse<HandoverReport>(e) }))
     })
 
     return () => {
@@ -171,5 +205,5 @@ export function useLiveData(): LiveState & { updateWorkOrder: (wo: WorkOrder) =>
     }
   }, [])
 
-  return { ...state, updateWorkOrder }
+  return { ...state, updateWorkOrder, updateHandover }
 }

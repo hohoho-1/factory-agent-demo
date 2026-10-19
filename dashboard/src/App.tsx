@@ -4,6 +4,7 @@ import { ActionStatsTable } from './components/ActionStatsTable'
 import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
 import { EquipmentCard } from './components/EquipmentCard'
+import { HandoverModal } from './components/HandoverModal'
 import { WorkOrderModal } from './components/WorkOrderModal'
 import { WorkOrderPanel } from './components/WorkOrderPanel'
 import { EQUIPMENT } from './equipment'
@@ -53,6 +54,7 @@ export default function App() {
   const [openWoId, setOpenWoId] = useState<number | null>(null)
   const openWo = live.workOrders.find((w) => w.id === openWoId) ?? null
   const setOpenWo = (wo: WorkOrder) => setOpenWoId(wo.id)
+  const [handoverOpen, setHandoverOpen] = useState(false)
 
   const activeAlarms = useMemo(() => {
     const map = new Map<string, Alarm>()
@@ -92,6 +94,9 @@ export default function App() {
             <span className="conn__dot" />
             {live.connected ? '실시간 연결' : '연결 끊김'}
           </span>
+          <button className="button button--ghost" onClick={() => setHandoverOpen(true)}>
+            교대 인수인계
+          </button>
           <span className="clock">{new Date(now).toLocaleTimeString('ko-KR', { hour12: false })}</span>
           <button className="icon-button" onClick={toggleTheme} aria-label="밝게/어둡게 전환" title="밝게/어둡게 전환">
             ◐
@@ -137,6 +142,14 @@ export default function App() {
 
       {openWo && (
         <WorkOrderModal workOrder={openWo} onUpdated={live.updateWorkOrder} onClose={() => setOpenWoId(null)} />
+      )}
+      {handoverOpen && (
+        <HandoverModal
+          reports={live.handovers}
+          now={now}
+          onCreated={live.updateHandover}
+          onClose={() => setHandoverOpen(false)}
+        />
       )}
     </div>
   )

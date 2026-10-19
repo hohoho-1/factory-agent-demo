@@ -1,7 +1,10 @@
 package com.factoryagent.backend.workorder;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.List;
 
 public interface WorkOrderRepository extends JpaRepository<WorkOrder, Long> {
@@ -11,6 +14,14 @@ public interface WorkOrderRepository extends JpaRepository<WorkOrder, Long> {
     List<WorkOrder> findTop50ByOrderByCreatedAtDesc();
 
     List<WorkOrder> findByStatus(WorkOrderStatus status);
+
+    /** 시간대 안에 작성·완료된 지시서 + 아직 열린(미확인·조치 중) 지시서. 인수인계 리포트 재료. */
+    @Query("select w from WorkOrder w where (w.createdAt >= :from and w.createdAt < :to)"
+            + " or (w.completedAt >= :from and w.completedAt < :to)"
+            + " or w.status in (com.factoryagent.backend.workorder.WorkOrderStatus.OPEN,"
+            + " com.factoryagent.backend.workorder.WorkOrderStatus.ACKNOWLEDGED)"
+            + " order by w.createdAt")
+    List<WorkOrder> findForWindow(@Param("from") Instant from, @Param("to") Instant to);
 
     /** 같은 설비·지표에서 조치가 끝난 지시서 (현재 알람 것은 제외), 최근 완료 순 5건. */
     List<WorkOrder> findTop5ByEquipmentIdAndMetricAndStatusAndAlarmIdNotOrderByCompletedAtDesc(

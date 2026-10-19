@@ -238,12 +238,16 @@ class LlmGenerator:
         }
 
     def _call(self, user_prompt: str) -> dict:
+        return self.call_json(SYSTEM_PROMPT, user_prompt, OUTPUT_SCHEMA)
+
+    def call_json(self, system: str, user_prompt: str, schema: dict) -> dict:
+        """JSON 스키마로 고정한 응답을 받아 dict 로 돌려준다. 인수인계 리포트도 이 호출을 쓴다."""
         response = self.client.beta.messages.create(
             model=self.model,
             max_tokens=16000,
-            system=SYSTEM_PROMPT,
+            system=system,
             messages=[{"role": "user", "content": user_prompt}],
-            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA}},
+            output_config={"effort": self.effort, "format": {"type": "json_schema", "schema": schema}},
             # 안전 분류기가 거절하면 서버가 다른 모델로 다시 돌린다 (그래도 거절이면 stop_reason 이 refusal)
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
