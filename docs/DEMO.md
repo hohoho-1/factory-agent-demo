@@ -108,6 +108,8 @@ powershell -File scripts\plc-write.ps1 MIXER-01 speed_sp 95
 
 ### 3-3. 배치 공정 — 단계를 알아야 알람이 의미가 있다 (OPC UA 모드) — 2분
 
+> **순서 주의**: 배합기 이상은 한 번에 하나만 돈다. 3-2의 `mixer_resonance`는 10분 동안 이어지므로, 그 사이에 넣은 `mixer_underheat`는 무시된다. 둘 다 보여 줄 거면 **3-3을 먼저** 하고 3-2를 마지막에 한다.
+
 ```powershell
 powershell -File scripts\inject.ps1 batch_start
 ```
