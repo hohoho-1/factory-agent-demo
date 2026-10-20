@@ -137,6 +137,22 @@ public class TrendForecaster {
         return List.copyOf(active.values());
     }
 
+    /**
+     * 배치 단계가 바뀌면 그 설비의 추세 창·평소 수준을 버린다 (단계마다 정상 수준이 다르다).
+     * 진행 중이던 예측은 해제 이벤트로 돌려준다.
+     */
+    public synchronized List<ForecastEvent> reset(String equipmentId) {
+        String prefix = equipmentId + ":";
+        List<ForecastEvent> cleared = active.entrySet().stream()
+                .filter(e -> e.getKey().startsWith(prefix))
+                .map(e -> new ForecastEvent(ForecastEvent.Type.CLEARED, e.getValue(), "PHASE", null))
+                .toList();
+        cleared.forEach(e -> clear(e.forecast().equipmentId() + ":" + e.forecast().metric()));
+        windows.keySet().removeIf(k -> k.startsWith(prefix));
+        baselines.keySet().removeIf(k -> k.startsWith(prefix));
+        return cleared;
+    }
+
     /** 현재 값이 평소 수준에서 기준 쪽으로 충분히 벗어났는지 (기준 방향 무관). */
     static boolean departed(Baseline baseline, double value, double limit) {
         double gap = limit - baseline.mean();

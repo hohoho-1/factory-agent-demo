@@ -1,5 +1,5 @@
 import type { Alarm, Forecast, WorkOrder } from '../api'
-import { displayUnit, EQUIPMENT_BY_ID, METRIC_LABEL } from '../equipment'
+import { displayUnit, EQUIPMENT_BY_ID, METRIC_LABEL, PHASE_LABEL } from '../equipment'
 import { formatDuration, formatTime, formatValue } from '../format'
 import { seriesKey, type SeriesMap } from '../useLiveData'
 import { forecastText } from './EquipmentCard'
@@ -82,6 +82,11 @@ export function AlarmPanel({ forecasts, alarms, workOrders, series, now, onOpenW
                   현재 <b>{formatValue(current)}{unit}</b> · 최악 {formatValue(peak)}{unit} · 기준{' '}
                   {a.direction === 'HIGH' ? '≥' : '≤'} {formatValue(a.thresholdValue)}{unit}
                 </div>
+                {a.batchPhase && (
+                  <div className="alarm__phase">
+                    배치 {a.batchId ?? ''} · {PHASE_LABEL[a.batchPhase] ?? a.batchPhase} 단계 기준으로 판정
+                  </div>
+                )}
                 {a.forecastLeadSeconds != null && (
                   <div className="alarm__lead">◆ 발생 {a.forecastLeadSeconds}초 전에 추세로 예측됨</div>
                 )}

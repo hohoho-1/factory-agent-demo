@@ -22,6 +22,9 @@ public interface AlarmRepository extends JpaRepository<Alarm, Long> {
     /** 매뉴얼 개선 제안 재료: 설비·지표의 알람 이력. */
     List<Alarm> findTop100ByEquipmentIdAndMetricOrderByRaisedAtDesc(String equipmentId, String metric);
 
+    /** 시간대 안에 발생한 알람 (배치 기록용). */
+    List<Alarm> findByRaisedAtBetweenOrderByRaisedAt(Instant from, Instant to);
+
     /** 시간대 안에 발생한 알람 + 그 전에 발생해 아직 진행 중인 알람. */
     @Query("select a from Alarm a where (a.raisedAt >= :from and a.raisedAt < :to) or a.status = com.factoryagent.backend.alarm.AlarmStatus.ACTIVE"
             + " order by a.raisedAt")

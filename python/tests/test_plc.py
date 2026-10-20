@@ -59,6 +59,46 @@ class LineProcessTest(unittest.TestCase):
         self.assertEqual(p.setpoints[("MIXER-01", "speed_sp")], 45.0)
 
 
+class BatchSequenceTest(unittest.TestCase):
+    def test_batch_runs_phases_and_temperature_follows(self):
+        p = LineProcess()
+        self.assertEqual(p.states()["MIXER-01"]["batchPhase"], "IDLE")
+        p.inject("batch_start")
+        state = p.states()["MIXER-01"]
+        self.assertEqual(state["batchPhase"], "CHARGING")
+        self.assertTrue(state["batchId"].startswith("B-"))
+        self.assertEqual(state["recipe"], "크림 베이스 A")
+
+        seen = []
+        temps = {}
+        for _ in range(200):
+            values = p.scan()
+            phase = p.states()["MIXER-01"]["batchPhase"]
+            if not seen or seen[-1] != phase:
+                seen.append(phase)
+            temps.setdefault(phase, []).append(values["MIXER-01"]["temperature"])
+        self.assertEqual(seen, ["CHARGING", "HEATING", "EMULSIFYING", "COOLING", "DISCHARGING", "IDLE"])
+        self.assertGreater(min(temps["EMULSIFYING"]), 70)   # 유화는 75C 근처
+        self.assertLess(temps["DISCHARGING"][-1], 45)        # 냉각 후 배출
+        self.assertEqual(p.states()["MIXER-01"]["batchId"], "")
+
+    def test_second_start_is_ignored_while_running(self):
+        p = LineProcess()
+        p.inject("batch_start")
+        first = p.batch.batch_id
+        p.inject("batch_start")
+        self.assertEqual(p.batch.batch_id, first)
+
+    def test_underheat_lowers_emulsifying_temperature(self):
+        p = LineProcess()
+        p.inject("batch_start")
+        while p.states()["MIXER-01"]["batchPhase"] != "EMULSIFYING":
+            p.scan()
+        p.inject("mixer_underheat")
+        low = min(run_scans(p, 1)["MIXER-01"]["temperature"] for _ in range(35))
+        self.assertLess(low, 62)  # 유화 위험 하한 아래로
+
+
 class GatewayMessageTest(unittest.TestCase):
     def test_parse_command(self):
         cmd = parse_command(json.dumps({"requestId": 3, "equipmentId": "MIXER-01", "tag": "speed_sp",
@@ -89,9 +129,13 @@ class OpcUaRoundTripTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(mixer.tags["vibration"].unit, "mm/s")
             self.assertEqual(set(line), {"TANK-01", "TANK-02", "MIXER-01", "FILLER-01"})
 
-            telemetry = build_telemetry(mixer, {"vibration": 2.512, "speed_sp": 60.0}, None)
+            telemetry = build_telemetry(mixer, {"vibration": 2.512, "speed_sp": 60.0, "batchPhase": "HEATING"}, None)
             self.assertEqual(telemetry["metrics"], {"vibration": 2.51, "speed_sp": 60.0})
             self.assertEqual(telemetry["units"]["speed_sp"], "rpm")
+            self.assertEqual(telemetry["state"], {"batchPhase": "HEATING"})
+            self.assertNotIn("batchPhase", telemetry["units"])
+            self.assertEqual(mixer.tags["batchPhase"].role, "STATE")
+            self.assertNotIn("state", build_telemetry(line["FILLER-01"], {"speed": 120.0}, None))
 
             ok = await write_setpoint(mixer, {"requestId": 1, "equipmentId": "MIXER-01", "tag": "speed_sp",
                                               "value": 50.0})

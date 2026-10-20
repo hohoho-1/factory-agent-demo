@@ -81,7 +81,20 @@ public class Alarm {
     @Column(name = "forecast_lead_seconds")
     private Long forecastLeadSeconds;
 
+    /** 발생 시점의 배치 단계 (예: EMULSIFYING). 단계를 모르면 null. 같은 값이라도 단계마다 정상 범위가 다르다 */
+    @Column(name = "batch_phase", length = 32)
+    private String batchPhase;
+
+    @Column(name = "batch_id", length = 32)
+    private String batchId;
+
     protected Alarm() {
+    }
+
+    public Alarm inBatch(String phase, String batchId) {
+        this.batchPhase = phase;
+        this.batchId = batchId;
+        return this;
     }
 
     public void markForecast(long leadSeconds) {
@@ -157,4 +170,6 @@ public class Alarm {
     public Instant getUpdatedAt() { return updatedAt; }
     public Instant getClearedAt() { return clearedAt; }
     public Long getForecastLeadSeconds() { return forecastLeadSeconds; }
+    public String getBatchPhase() { return batchPhase; }
+    public String getBatchId() { return batchId; }
 }

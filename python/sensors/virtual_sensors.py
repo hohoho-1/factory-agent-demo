@@ -108,15 +108,16 @@ SCENARIOS = {
 
 
 class AnomalyInjector:
-    def __init__(self, line):
+    def __init__(self, line, scenarios=None):
         self.by_id = {e.equipment_id: e for e in line}
+        self.scenarios = scenarios or SCENARIOS  # 가상 PLC 는 PLC 전용 시나리오를 더해서 넘긴다
         self.active = None  # (scenario, metric, 남은 틱)
 
     def start(self, name):
         if self.active:
             print(f"[ANOMALY] skip {name}: {self.active[0]} is still running", flush=True)
             return
-        eq_id, metric_name, change, ticks, *extra = SCENARIOS[name]
+        eq_id, metric_name, change, ticks, *extra = self.scenarios[name]
         mode = extra[0] if extra else "drift"
         metric = self.by_id[eq_id].metrics[metric_name]
         if mode == "ramp":

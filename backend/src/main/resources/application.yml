@@ -52,8 +52,23 @@ app:
       "[MIXER]":
         vibration: { warn-high: 4.5, crit-high: 7.1 }   # ISO 10816 구역 경계 참고
         current: { warn-high: 18, crit-high: 22 }
+        # 내용물 온도 (가상 PLC 모드에만 있음). 배치 단계를 모를 때는 상온 기준이라, 가열하면 오경보가 난다
+        temperature: { warn-high: 50, crit-high: 60, delay: 5 }
       "[FILLER]":
-        speed: { warn-low: 100, crit-low: 80 }
+        speed: { warn-low: 100, crit-low: 80, delay: 3 }  # 병 걸림 같은 순간 정체는 3초 지속돼야 알람
+    # 배치 단계별 기준 (가상 PLC 의 batchPhase 태그). 단계를 알면 위 기본 기준 대신 이것을 쓴다
+    # 예: 유화 중 75C 는 정상이고 68C 아래면 '유화 온도 부족', 대기 중에는 50C 만 넘어도 이상
+    phase-rules:
+      "[MIXER]":
+        temperature:
+          IDLE:        { warn-high: 50, crit-high: 60, delay: 5 }
+          CHARGING:    { warn-high: 50, crit-high: 60, delay: 5 }
+          HEATING:     { warn-high: 82, crit-high: 88, delay: 5 }
+          EMULSIFYING: { warn-high: 82, crit-high: 88, warn-low: 68, crit-low: 62, delay: 5 }
+          COOLING:     { warn-high: 82, crit-high: 88, delay: 5 }
+          DISCHARGING: { warn-high: 50, crit-high: 60, delay: 5 }
+    phase-grace: 10s                         # 단계가 바뀐 직후 10초는 단계별 기준으로 새 알람을 내지 않는다
+    transitional-phases: [HEATING, COOLING]  # 값이 목표를 향해 움직이는 게 정상인 단계: 추세 예측 안 함
 
 logging:
   level:

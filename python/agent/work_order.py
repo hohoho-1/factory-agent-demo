@@ -20,6 +20,7 @@ METRIC_KO = {"temperature": "온도", "level": "레벨", "vibration": "진동", 
 # 검색 질의 확장: 지표·방향을 현장 용어로 풀어 쓴다
 SYMPTOM_KEYWORDS = {
     ("temperature", "HIGH"): "온도 상승 과열 스팀 가열",
+    ("temperature", "LOW"): "온도 저하 유화 온도 부족 재킷 스팀 공급",
     ("level", "LOW"): "레벨 저하 원료 부족 보충 누출",
     ("vibration", "HIGH"): "진동 상승 베어링 불균형 소음",
     ("current", "HIGH"): "과전류 전류 상승 모터 부하 점도",
@@ -29,6 +30,17 @@ SYMPTOM_KEYWORDS = {
 ACTION_SECTION = {"WARNING": "조치 - 경고(WARNING)", "CRITICAL": "조치 - 위험(CRITICAL)"}
 
 SEVERITY_KO = {"WARNING": "경고", "CRITICAL": "위험"}
+PHASE_KO = {"IDLE": "대기", "CHARGING": "원료 투입", "HEATING": "가열", "EMULSIFYING": "유화",
+            "COOLING": "냉각", "DISCHARGING": "배출"}
+
+
+def batch_line(alarm: dict) -> list[str]:
+    """배치 공정 중 발생한 알람이면 '- 배치: B-1020-01 · 유화 단계' 한 줄. 단계를 모르면 없음."""
+    phase = alarm.get("batchPhase")
+    if not phase:
+        return []
+    where = f"{alarm['batchId']} · " if alarm.get("batchId") else ""
+    return [f"- 배치: {where}{PHASE_KO.get(phase, phase)} 단계 중 발생"]
 OUTCOME_KO = {"RESOLVED": "해결", "PARTIAL": "부분 해결", "UNRESOLVED": "미해결"}
 
 
@@ -148,6 +160,7 @@ class TemplateGenerator:
             f"- 발생값 {_fmt(alarm['triggerValue'])}{unit} → 현재 {_fmt(alarm['lastValue'])}{unit}"
             f" (최악 {_fmt(alarm['peakValue'])}{unit}), 기준 {op} {_fmt(alarm['thresholdValue'])}{unit}",
             f"- 최초 발생: {alarm['raisedAt']}",
+            *batch_line(alarm),
             f"- 근거 매뉴얼: {manual.id} {manual.title}",
             "",
             *history_section(history, alarm["equipmentId"]),

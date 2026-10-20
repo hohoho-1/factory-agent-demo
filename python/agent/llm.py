@@ -20,7 +20,8 @@ from dataclasses import dataclass
 from . import setpoint
 from .rag import Hit, Manual, ManualIndex
 from .work_order import (
-    EQUIPMENT_KO, METRIC_KO, TemplateGenerator, _fmt, _reference, build_query, cause_options, history_section,
+    EQUIPMENT_KO, METRIC_KO, TemplateGenerator, _fmt, _reference, batch_line, build_query, cause_options,
+    history_section,
 )
 
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -37,6 +38,7 @@ SYSTEM_PROMPT = """\
 - 모든 항목의 sources 에 실제로 근거로 삼은 번호를 적습니다. 목록에 없는 번호는 쓰지 않습니다.
 - 추정 원인의 cause 는 '원인 선택지'에 있는 이름을 글자 그대로 씁니다. 선택지에 없는 원인이 근거에 있을 때만 새 이름을 씁니다.
 - 과거 조치 기록에 '해결'된 원인이 있으면 그 원인을 추정 원인 맨 앞에 두고, situation 에서 먼저 확인하라고 말합니다. 같은 유형의 다른 설비 기록은 참고로만 다룹니다.
+- 알람에 배치 단계가 있으면 그 단계의 정상 범위를 기준으로 판단하고, situation 에서 어느 배치·단계 중의 이상인지 밝힙니다.
 - 즉시 조치는 현재 심각도에 맞는 매뉴얼 조치를 따릅니다. 안전 주의사항(잠금·표지 등)은 빠뜨리지 않으며, 안전장치를 우회하라는 지시는 절대 쓰지 않습니다.
 - 문장은 짧은 명령형으로 씁니다 ("~한다", "~확인한다"). situation 은 2~3문장, summary 는 한 문장입니다.
 - setpoint_changes 는 '조정 가능한 설정값' 목록에 있는 태그만, 현재 심각도의 매뉴얼 조치에 설정값(회전수·온도 설정 등) 조정 근거가
@@ -146,6 +148,7 @@ def build_user_prompt(alarm: dict, manual: Manual, sources: list[Source], option
         f"- 심각도: {alarm['severity']}",
         f"- 현재 {_fmt(alarm['lastValue'])}{unit}, 최악 {_fmt(alarm['peakValue'])}{unit},"
         f" 기준 {op} {_fmt(alarm['thresholdValue'])}{unit}",
+        *batch_line(alarm),
         f"- 주 매뉴얼: {manual.id} {manual.title}",
     ])
     source_text = "\n\n".join(f"<{s.id}>\n{s.text}\n</{s.id}>" for s in sources)
@@ -193,6 +196,7 @@ def render_body(title: str, alarm: dict, manual: Manual, data: dict, sources: li
         f"- 발생값 {_fmt(alarm['triggerValue'])}{unit} → 현재 {_fmt(alarm['lastValue'])}{unit}"
         f" (최악 {_fmt(alarm['peakValue'])}{unit}), 기준 {op} {_fmt(alarm['thresholdValue'])}{unit}",
         f"- 최초 발생: {alarm['raisedAt']}",
+        *batch_line(alarm),
         f"- 근거 매뉴얼: {manual.id} {manual.title}",
         "",
         *history_section(history, alarm["equipmentId"]),

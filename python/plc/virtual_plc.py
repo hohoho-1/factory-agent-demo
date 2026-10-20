@@ -7,7 +7,8 @@
               예) ns=2;s=Line1.MIXER-01.vibration   (공정값 PV, 읽기 전용)
                   ns=2;s=Line1.MIXER-01.speed_sp    (설정값 SP, 쓰기 가능 · 인터록 검사)
                   ns=2;s=Line1.MIXER-01.LastInterlock (마지막 인터록 거부 사유)
-  설비 객체에는 EquipmentType, 태그에는 Unit · Role(PV/SP) 속성(property)이 붙는다.
+                  ns=2;s=Line1.MIXER-01.batchPhase  (배치 단계, 문자열 상태 태그. batchId · recipe 도 같은 방식)
+  설비 객체에는 EquipmentType, 태그에는 Unit · Role(PV/SP/STATE) 속성(property)이 붙는다.
 
 1초(기본)마다 PLC 스캔을 돌려 태그 값을 갱신한다. 설정값 쓰기는 process.LineProcess 의 인터록을 통과해야
 반영되고, 거부되면 OPC UA 상태 코드(BadOutOfRange / BadInvalidState)로 응답한다.
@@ -31,7 +32,7 @@ from asyncua import Server, ua
 
 from sensors.virtual_sensors import CONTROL_TOPIC, SCENARIOS
 
-from .process import PLC_SCENARIOS, SETPOINT_TAGS, InterlockError, LineProcess
+from .process import BATCH_START, PLC_RAMP_SCENARIOS, PLC_SCENARIOS, SETPOINT_TAGS, InterlockError, LineProcess
 
 NAMESPACE_URI = "urn:factory-agent-demo:line1"
 DEFAULT_ENDPOINT = "opc.tcp://0.0.0.0:4840/factory/line1/"
@@ -59,6 +60,8 @@ class VirtualPlc:
         self.idx = 0
         self.values: dict[tuple[str, str], ua.NodeId] = {}
         self.interlock_nodes: dict[str, ua.NodeId] = {}
+        self.state_nodes: dict[tuple[str, str], ua.NodeId] = {}
+        self._last_states: dict[tuple[str, str], str] = {}
         self._local_write = False  # PLC 스캔이 SP 노드를 갱신할 때는 인터록을 거치지 않는다
 
     async def start(self) -> None:
@@ -92,6 +95,11 @@ class VirtualPlc:
                     await var.set_writable()
                     self.server.set_attribute_value_setter(var.nodeid, self._setter(eq_id, metric))
                 self.values[(eq_id, metric)] = var.nodeid
+            for name, text in self.process.states().get(eq_id, {}).items():
+                var = await obj.add_variable(node_id(idx, eq_id, name), ua.QualifiedName(name, idx),
+                                             ua.Variant(text, ua.VariantType.String))
+                await var.add_property(node_id(idx, eq_id, name, "Role"), ua.QualifiedName("Role", idx), "STATE")
+                self.state_nodes[(eq_id, name)] = var.nodeid
             if any(eq == eq_id for eq, _ in SETPOINT_TAGS):
                 lock = await obj.add_variable(node_id(idx, eq_id, INTERLOCK_TAG), ua.QualifiedName(INTERLOCK_TAG, idx),
                                               ua.Variant("", ua.VariantType.String))
@@ -130,6 +138,13 @@ class VirtualPlc:
         try:
             for (eq_id, metric), nid in self.values.items():
                 await self.server.write_attribute_value(nid, _double(values[eq_id][metric]))
+            for eq_id, states in self.process.states().items():
+                for name, text in states.items():
+                    key = (eq_id, name)
+                    if key in self.state_nodes and self._last_states.get(key) != text:
+                        self._last_states[key] = text
+                        await self.server.write_attribute_value(self.state_nodes[key], ua.DataValue(
+                            ua.Variant(text, ua.VariantType.String), SourceTimestamp=_now(), ServerTimestamp=_now()))
         finally:
             self._local_write = False
 
@@ -139,7 +154,8 @@ class VirtualPlc:
                 name = anomalies.get_nowait()
                 if not self.process.inject(name):
                     print(f"[ANOMALY] unknown scenario '{name}',"
-                          f" choose one of {list(SCENARIOS) + list(PLC_SCENARIOS)}", flush=True)
+                          f" choose one of {[BATCH_START, *SCENARIOS, *PLC_SCENARIOS, *PLC_RAMP_SCENARIOS]}",
+                          flush=True)
             await self.scan_once()
             await asyncio.sleep(interval)
 

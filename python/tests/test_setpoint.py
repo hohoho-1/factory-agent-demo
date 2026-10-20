@@ -49,6 +49,35 @@ class TemplateProposalTest(unittest.TestCase):
         self.assertIsNone(TemplateGenerator().generate(TANK_ALARM, self.index, [], [normal])["setpointChange"])
 
 
+class BatchPhaseWorkOrderTest(unittest.TestCase):
+    """배치 단계 중 알람: 맞는 매뉴얼을 찾고 지시서에 배치·단계가 들어간다."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.index = ManualIndex(load_manuals())
+
+    def test_underheat_during_emulsifying_finds_temperature_manual(self):
+        alarm = {**WARNING, "metric": "temperature", "unit": "C", "direction": "LOW", "thresholdValue": 68,
+                 "triggerValue": 67.5, "lastValue": 66, "peakValue": 65.2,
+                 "batchPhase": "EMULSIFYING", "batchId": "B-1020-01"}
+        wo = TemplateGenerator().generate(alarm, self.index, [], [])
+        self.assertEqual(wo["references"][0]["manualId"], "MAN-MIX-TEMP-01")
+        self.assertIn("- 배치: B-1020-01 · 유화 단계 중 발생", wo["body"])
+        self.assertIn("유화 단계 타이머를 연장", wo["body"])
+        self.assertIn("재킷 스팀 공급 부족", wo["causeOptions"])
+
+    def test_no_batch_line_without_phase(self):
+        wo = TemplateGenerator().generate(WARNING, self.index, [], [])
+        self.assertNotIn("- 배치:", wo["body"])
+
+    def test_llm_prompt_mentions_batch_phase(self):
+        alarm = {**WARNING, "batchPhase": "EMULSIFYING", "batchId": "B-1020-01"}
+        client = FakeClient({**GOOD, "setpoint_changes": []})
+        LlmGenerator(client=client, model="m", effort="low").generate(
+            alarm, self.index, [past(12, "RESOLVED", "베어링 마모·윤활 부족")], [])
+        self.assertIn("- 배치: B-1020-01 · 유화 단계 중 발생", client.calls[0]["messages"][0]["content"])
+
+
 class LlmProposalTest(unittest.TestCase):
 
     @classmethod

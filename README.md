@@ -16,7 +16,7 @@
 |---|---|---|---|---|
 | 원료 탱크 1 (수상) | TANK-01 | 레벨, 온도 | 70%, 25°C | 레벨 ≤25 / ≤15%, 온도 ≥50 / ≥60°C |
 | 원료 탱크 2 (오일상·계면활성제) | TANK-02 | 레벨, 온도 | 65%, 40°C | 위와 같음 |
-| 배합기 | MIXER-01 | 진동, 전류 | 2.5mm/s, 12A | 진동 ≥4.5 / ≥7.1mm/s (ISO 10816 참고), 전류 ≥18 / ≥22A |
+| 배합기 | MIXER-01 | 진동, 전류 (+ 내용물 온도: OPC UA 모드) | 2.5mm/s, 12A | 진동 ≥4.5 / ≥7.1mm/s (ISO 10816 참고), 전류 ≥18 / ≥22A, 온도는 배치 단계별 (아래) |
 | 충진기 | FILLER-01 | 속도 | 120bpm | ≤100 / ≤80bpm |
 
 ## 구성도
@@ -36,7 +36,7 @@ flowchart LR
     end
     subgraph AI["AI 에이전트"]
         AG["Python 에이전트<br/>RAG 검색 → 조치 지시서"]
-        M["설비 매뉴얼 7종"]
+        M["설비 매뉴얼 8종"]
     end
     UI["React<br/>실시간 관제 대시보드"]
 
@@ -72,6 +72,9 @@ flowchart LR
 12. **AI에게 질문** — 상단 버튼에서 "배합기 진동 원인이 주로 뭐였어?" 같은 질문을 하면, 에이전트가 최근 7일 알람 · 조치 기록, 설비별 통계, 매뉴얼을 번호 붙여 Claude에 주고 근거 번호가 달린 답을 받는다. 재료로 답할 수 없는 질문은 "답할 수 없다"고 답한다.
 13. **매뉴얼 개선 제안** — 조치 이력 요약 표의 **매뉴얼 개선 제안**을 누르면, 그 설비 · 지표의 조치 기록을 매뉴얼과 비교해 개선안 초안을 쓴다. 모든 변경 제안은 현장 조치 기록 근거가 있어야 하고, 고칠 섹션은 실제 매뉴얼 섹션 중에서만 고른다. 사람이 검토해 반영하는 초안이다.
 14. **승인형 설정값 제어** (`-OpcUa`) — 매뉴얼의 현재 심각도 조치에 설정값 조정이 있으면(예: 배합기 경고 "교반 회전수를 10~20% 낮추고") 지시서에 **권장 설정값 변경**(태그, 현재값 → 제안값, 이유, 근거)이 붙는다. 작업자가 지시서 팝업에서 **승인 후 실행**을 누르면 백엔드가 운전 범위를 다시 검사하고 감사 기록(승인자, 전후 값, 시각)을 남긴 뒤 `factory/line1/commands`로 명령을 보낸다. 게이트웨이가 PLC 설정값 태그에 OPC UA로 쓰고, PLC 인터록이 받아들이면 공정이 반응한다(회전수 ↓ → 진동 ↓ → 알람 해제). 인터록이 거부하면 그 사유가 화면에 남는다.
+15. **배치 단계 인식 알람** (`-OpcUa`) — 가상 PLC가 배합기를 배치 용기로 보고 레시피 단계(원료 투입 → 가열 → 유화 → 냉각 → 배출)를 돌리며 단계 · 배치 번호 · 레시피를 상태 태그로 내보낸다. 백엔드는 단계별 기준으로 판정한다: 같은 75°C라도 유화 중이면 정상, 대기 중이면 위험이고, 유화 중 68°C 아래는 '유화 온도 부족'이다. 단계를 모르면 상온 기준이라 가열할 때마다 오경보가 난다. 단계가 바뀐 직후 10초는 새 알람을 내지 않고, 값이 목표를 향해 움직이는 단계(가열 · 냉각)는 추세 예측을 끈다. 알람과 지시서에 "배치 B-1020-01 · 유화 단계 중 발생"이 남는다.
+16. **알람 지속 조건 · 일시 억제** — 규칙마다 "N초 이상 지속돼야 알람"(`delay`)을 둘 수 있다 (배합기 온도 5초, 충진 속도 3초). 정비 중인 설비는 카드의 **알람 억제**로 사유와 함께 30분 동안 새 알람을 끄고, 시간이 지나면 저절로 풀린다 (알람 합리화 표준 ISA-18.2의 shelving).
+17. **간이 전자 배치 기록** — 배치마다 단계별 시작 · 소요 시간 · 온도 범위를 남기고, 배치 중 알람 · AI 지시서 · 작업자 조치 · 설정값 변경과 승인자를 한 장으로 묶는다. 판정 요약은 이상 없음 / 이상 있었고 조치 완료(품질 검토) / 조치 미완료(출하 보류 권고)다. CGMP 공장은 무인화해도 배치 기록 의무가 그대로라, AI 판단과 사람 승인이 기록에 함께 남아야 한다.
 
 ![AI 조치 지시서](docs/images/work-order.png)
 
@@ -107,7 +110,7 @@ factory-agent-demo/
 │       ├── handover.py              # 교대 인수인계 리포트 (Claude · 템플릿)
 │       ├── assistant.py             # AI 질문 답변 · 매뉴얼 개선 제안 (Claude · 템플릿)
 │       ├── setpoint.py              # 권장 설정값 변경 (템플릿 규칙 · LLM 제안 검증)
-│       └── manuals/*.md             # 가상 설비 매뉴얼 7종
+│       └── manuals/*.md             # 가상 설비 매뉴얼 8종
 ├── backend/                         # Spring Boot
 │   └── src/main/java/com/factoryagent/backend/
 │       ├── mqtt/                    # MQTT 구독(텔레메트리) · 발행(알람)
@@ -118,6 +121,7 @@ factory-agent-demo/
 │       ├── forecast/                # 추세 기반 조기 경보 (회귀 · 평소 수준 학습)
 │       ├── assistant/               # AI 질문 · 매뉴얼 개선 제안 요청 · 재료 · 결과
 │       ├── control/                 # 설정값 변경 제안 · 승인 · 거절 · 감사 기록 · 명령 결과
+│       ├── batch/                   # 배치 단계 추적 · 배치 기록(EBR) · 단계별 기준 조회
 │       └── stream/                  # 대시보드용 SSE
 ├── dashboard/                       # React 관제 화면
 ├── scripts/                         # 데모 실행 · 이상 주입 · 종료
@@ -184,6 +188,8 @@ UaExpert 같은 OPC UA 클라이언트로 `opc.tcp://localhost:4840/factory/line
 | `Line1.MIXER-01.speed_sp` | SP · 쓰기 | 교반 회전수 설정값. 진동은 회전수 비율의 세제곱, 전류는 부하에 비례 |
 | `Line1.TANK-02.temp_sp` | SP · 쓰기 | 탱크 2 온도 설정값. 온도가 이 값으로 수렴 |
 | `Line1.{설비ID}.LastInterlock` | 읽기 | 마지막 인터록 거부 사유 |
+| `Line1.MIXER-01.temperature` | PV · 읽기 | 배합기 내용물 온도. 배치 단계마다 목표가 바뀜 (가열 · 유화 75°C, 냉각 40°C) |
+| `Line1.MIXER-01.batchPhase` · `batchId` · `recipe` | STATE · 읽기 | 배치 단계(IDLE · CHARGING · HEATING · EMULSIFYING · COOLING · DISCHARGING), 배치 번호, 레시피 (문자열) |
 
 설비 객체에는 `EquipmentType`, 태그에는 `Unit` · `Role`(PV/SP) 속성이 있어 게이트웨이는 설정 파일 없이 주소 공간을 browse 해서 태그를 찾습니다.
 
@@ -211,6 +217,8 @@ powershell -File scripts\inject.ps1 mixer_vibration
 | `mixer_bearing_wear` | 배합기 진동이 천천히 상승 (약 40초 뒤 경고, 추세 예측 데모용) | MAN-MIX-VIB-01 |
 | `mixer_resonance` | 회전수 과다로 인한 공진: 약 15초 뒤 진동 경고(5.6mm/s)에서 10분간 유지. OPC UA 모드에서 회전수 설정값을 낮추면 해소 | MAN-MIX-VIB-01 |
 | `tank_sp_misentry` | TANK-02 온도 설정값을 55°C로 잘못 입력 → 약 10초 뒤 온도 경고. 설정값을 40°C로 되돌리면 해소 (OPC UA 모드 전용) | MAN-TANK-TEMP-01 |
+| `batch_start` | 배치 1회 시작 (원료 투입 20초 → 가열 45초 → 유화 60초 → 냉각 45초 → 배출 20초). 현장 HMI 시작 버튼 시뮬레이션 (OPC UA 모드 전용) | |
+| `mixer_underheat` | 재킷 스팀 공급 저하로 배합기 온도가 최대 18°C 낮아짐. 유화 중이면 '유화 온도 부족' 경고 → 위험, 대기 중이면 알람 아님 (OPC UA 모드 전용) | MAN-MIX-TEMP-01 |
 | `random` | 위 중 하나 (`tank_sp_misentry` 제외) | |
 
 **인터록 시연** (OPC UA 모드) — 백엔드 승인을 거치지 않고 게이트웨이에 직접 명령을 보냅니다. PLC가 거부하고, 대시보드 **설정값 변경 이력**에 "외부 명령 · PLC 인터록 거부"로 남습니다.
@@ -247,7 +255,7 @@ cd dashboard; npm install; npm run dev                        # 대시보드 :51
 ### 테스트
 
 ```powershell
-mvn -f backend\pom.xml test                                   # 임계값 · 지시서 상태 전이 · 통계 · 설정값 승인/결과/시간 초과
+mvn -f backend\pom.xml test                                   # 임계값 · 단계별 알람 · 지속 조건 · 억제 · 배치 기록 · 지시서 · 설정값 승인
 cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼 검색 · LLM 검증 · 설정값 제안 · PLC 인터록 · OPC UA 왕복
 ```
 
@@ -255,7 +263,7 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 
 | 토픽 | 방향 | 내용 |
 |---|---|---|
-| `factory/line1/{설비ID}/telemetry` | 센서 또는 게이트웨이 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` (게이트웨이는 `speed` · `*_sp` 도 함께) |
+| `factory/line1/{설비ID}/telemetry` | 센서 또는 게이트웨이 → 백엔드 | `{"equipmentId","type","ts","metrics":{...},"units":{...}}` (게이트웨이는 `speed` · `*_sp` · 배합기 `temperature` 와 `"state":{"batchPhase","batchId","recipe"}` 도 함께) |
 | `factory/line1/commands` | 백엔드 → 게이트웨이 | `{"requestId","equipmentId","tag","value","approvedBy"}` 승인된 설정값 |
 | `factory/line1/commands/results` | 게이트웨이 → 백엔드 | `{"requestId","status":"APPLIED"\|"INTERLOCKED"\|"FAILED","code","message","before","after"}` |
 | `factory/line1/alarms` | 백엔드 → 에이전트 | `{"event":"RAISED"\|"ESCALATED"\|"CLEARED","alarm":{...}}` |
@@ -293,7 +301,12 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 | `GET /api/setpoint-changes` | 최근 설정값 변경 30건 (제안 · 승인 · 결과 · 외부 명령) |
 | `POST /api/setpoint-changes/{id}/approve` · `…/reject` | 승인(명령 전송) · 거절 `{"worker","note"}` |
 | `GET /api/setpoint-changes/{id}/audit` | 감사 기록 (제안 → 승인 → 반영/인터록 거부, 누가 · 언제 · 전후 값) |
-| `GET /api/stream` | SSE: `readings` · `alarm` · `forecast` · `work-order` · `handover` · `assistant` · `setpoint` · `ping` |
+| `GET /api/batch/state` | 설비별 현재 배치 단계 · 배치 번호 · 단계 시작 시각 |
+| `GET /api/alarm-rules/phases` | 설비 유형 → 지표 → 배치 단계 → 임계값 |
+| `GET /api/batches` · `GET /api/batches/{id}/record` | 최근 배치 20건 · 배치 기록 한 장 (단계, 배치 중 알람 · 지시서 · 설정값 변경, 판정 요약) |
+| `GET /api/alarm-shelves` · `POST /api/alarm-shelves` | 진행 중인 알람 억제 · 억제 시작 `{"equipmentId","metric","minutes","reason","worker"}` (사유 필수, 최대 120분) |
+| `POST /api/alarm-shelves/{id}/release` | 억제 해제 `{"worker"}` |
+| `GET /api/stream` | SSE: `readings` · `alarm` · `forecast` · `work-order` · `handover` · `assistant` · `setpoint` · `batch` · `shelf` · `ping` |
 
 ## 설계 포인트
 
@@ -302,6 +315,7 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 - **커밋 후 이벤트** — 알람 발행과 대시보드 전송은 `@TransactionalEventListener(AFTER_COMMIT)`로 DB 커밋 뒤에 합니다. 에이전트가 지시서를 저장할 때 알람 행이 반드시 있도록 보장합니다.
 - **설명 가능한 RAG** — 매뉴얼을 섹션 단위로 쪼개 문자 n-gram TF-IDF로 검색하고, 설비 유형·지표가 맞으면 가점을 줍니다. 지시서마다 근거 섹션과 점수를 남겨 "왜 이 조치인가"를 추적할 수 있습니다. 한국어 형태소 분석이나 모델 다운로드 없이 동작합니다.
 - **사람이 최종 판단** — 에이전트는 설비를 직접 조작하지 않고 지시서와 권장 설정값까지만 씁니다. 자율 수준은 "승인 후 실행"입니다: 작업자가 승인해야 명령이 나가고, 승인 · 결과는 감사 기록으로 쌓입니다(수정 · 삭제 없음).
+- **알람은 공정 맥락으로 판정한다** — 화장품 · 세제는 배치 공정이라 단계마다 정상 범위가 다릅니다. 고정 임계값 대신 PLC의 배치 단계를 받아 단계별 기준을 쓰고, 단계 전환 직후 유예 · 지속 조건 · 일시 억제로 의미 없는 알람을 줄였습니다 (ISA-18.2 알람 합리화). 단계별 기준은 설정 파일에 있어 레시피가 늘어나면 표만 늘리면 됩니다.
 - **안전 인터록은 PLC에 남긴다** — 백엔드의 운전 범위와 별개로 PLC 안에 하드 리밋과 위험 조건 인터록이 있습니다. 백엔드에 버그가 있거나 누가 게이트웨이에 직접 명령을 넣어도 PLC가 거부하고(`BadOutOfRange` · `BadInvalidState`), 그 시도도 기록됩니다. 승인 후 15초 안에 설비 응답이 없으면 실패로 닫습니다.
 - **현장 경험이 쌓이는 구조** — 작업자가 입력한 원인 · 조치 · 결과가 다음 지시서의 근거가 됩니다. 매뉴얼에는 없는 "이 설비는 보통 이게 원인이었다"는 현장 지식이 매뉴얼 절차 옆에 붙습니다. 지금은 같은 설비 · 지표로 찾고, 이력이 많아지면 증상 유사도로 검색하는 방향으로 넓힐 수 있습니다.
 - **근거를 강제한 LLM** — 키가 있으면 Claude가 지시서 문장을 씁니다. 검색은 그대로 TF-IDF가 하고, Claude에는 매뉴얼 구절(S1, S2…)과 과거 조치(H1…)에 번호를 붙여 보냅니다. 응답은 JSON 스키마로 고정하고 모든 항목에 근거 번호를 달게 한 뒤, 근거가 없거나 목록에 없는 번호를 쓰면 그 지시서를 버리고 템플릿으로 씁니다. 지시서에는 항목마다 *(근거: 점검 절차)* 처럼 출처가 붙습니다.
@@ -319,4 +333,8 @@ cd python; .venv\Scripts\python -m unittest discover -s tests -t .   # 매뉴얼
 - [x] 교대 인수인계 리포트, AI 질문, 매뉴얼 개선 제안
 - [ ] 다변량 이상 감지 (진동 + 전류 + 온도 상관관계), 예측 경보 정확도 기록
 - [x] OPC UA 가상 PLC · 엣지 게이트웨이, 승인형 설정값 제어 (PLC 인터록)
+- [x] 배치 단계 인식 알람, 알람 지속 조건 · 일시 억제, 간이 전자 배치 기록
+- [ ] 운전자 HMI 입력 모드, 로그인 · 역할 · 전자서명 승인(21 CFR Part 11), 태블릿 작업자 화면
+- [ ] 설비 · 태그 마스터(단계별 기준을 DB와 관리 화면으로), 다변량 이상 감지, MTBF · MTTR · 간이 OEE
+- [ ] 증상 유사도 이력 검색 (임베딩과 함께), 폐쇄망용 로컬 LLM
 - [ ] OPC UA 보안(서명 · 암호화, 사용자 인증), Modbus, Sparkplug B, Docker Compose 배포

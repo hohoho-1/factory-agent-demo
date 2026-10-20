@@ -5,6 +5,7 @@ import { ActionStatsTable } from './components/ActionStatsTable'
 import { AssistantModal } from './components/AssistantModal'
 import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
+import { BatchRecords } from './components/BatchRecords'
 import { EquipmentCard } from './components/EquipmentCard'
 import { HandoverModal } from './components/HandoverModal'
 import { SetpointHistory } from './components/SetpointHistory'
@@ -84,6 +85,11 @@ export default function App() {
     return `${alarmPart}|${donePart}`
   }, [live.alarms, live.workOrders])
 
+  // 배치 단계가 바뀔 때만 배치 기록 목록을 다시 읽는다
+  const batchKey = Object.values(live.batchStates)
+    .map((b) => `${b.batchId}:${b.phase}`)
+    .join(',')
+
   const critical = [...activeAlarms.values()].filter((a) => a.severity === 'CRITICAL').length
   const warning = activeAlarms.size - critical
 
@@ -131,8 +137,12 @@ export default function App() {
               series={live.series}
               units={live.units}
               rules={live.rules}
+              phaseRules={live.phaseRules}
               activeAlarms={activeAlarms}
               forecasts={live.forecasts}
+              batch={live.batchStates[eq.id]}
+              shelf={live.shelves.find((s) => s.equipmentId === eq.id && Date.parse(s.untilAt) > now)}
+              onShelfChanged={live.updateShelf}
               now={now}
             />
           ))}
@@ -153,6 +163,9 @@ export default function App() {
         </aside>
         <div className="full">
           <ActionStatsTable refreshKey={statsKey} onPropose={requestProposal} />
+        </div>
+        <div className="full">
+          <BatchRecords refreshKey={batchKey} />
         </div>
         <div className="full">
           <SetpointHistory changes={live.setpointChanges} onOpenWorkOrder={setOpenWoId} />

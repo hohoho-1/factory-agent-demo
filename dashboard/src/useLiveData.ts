@@ -3,10 +3,13 @@ import {
   getJson,
   type Alarm,
   type AlarmEventMessage,
+  type AlarmShelf,
   type AssistantTask,
+  type BatchState,
   type Forecast,
   type ForecastEventMessage,
   type HandoverReport,
+  type PhaseRules,
   type Reading,
   type Rules,
   type SetpointChange,
@@ -41,7 +44,12 @@ export interface LiveState {
   setpointChanges: SetpointChange[]
   /** 진행 중인 예측 경보 (seriesKey → 예측). 실제 알람으로 이어지면 알람의 forecastLeadSeconds 에 남는다 */
   forecasts: Record<string, Forecast>
+  /** 설비 → 현재 배치 단계 (가상 PLC 모드에서만) */
+  batchStates: Record<string, BatchState>
+  /** 진행 중인 알람 억제 */
+  shelves: AlarmShelf[]
   rules: Rules
+  phaseRules: PhaseRules
   connected: boolean
   loaded: boolean
   error: string | null
@@ -57,10 +65,15 @@ type Action =
       assistantTasks: AssistantTask[]
       setpointChanges: SetpointChange[]
       forecasts: Forecast[]
+      batchStates: BatchState[]
+      shelves: AlarmShelf[]
       rules: Rules
+      phaseRules: PhaseRules
     }
   | { type: 'forecast'; message: ForecastEventMessage }
   | { type: 'setpoint'; change: SetpointChange }
+  | { type: 'batch'; state: BatchState }
+  | { type: 'shelf'; shelf: AlarmShelf }
   | { type: 'assistant'; task: AssistantTask }
   | { type: 'readings'; readings: Reading[] }
   | { type: 'alarm'; alarm: Alarm }
@@ -78,7 +91,10 @@ const initialState: LiveState = {
   assistantTasks: [],
   setpointChanges: [],
   forecasts: {},
+  batchStates: {},
+  shelves: [],
   rules: {},
+  phaseRules: {},
   connected: false,
   loaded: false,
   error: null,
@@ -141,7 +157,10 @@ function reducer(state: LiveState, action: Action): LiveState {
         assistantTasks: action.assistantTasks,
         setpointChanges: action.setpointChanges,
         forecasts: Object.fromEntries(action.forecasts.map((f) => [seriesKey(f.equipmentId, f.metric), f])),
+        batchStates: Object.fromEntries(action.batchStates.map((b) => [b.equipmentId, b])),
+        shelves: action.shelves,
         rules: action.rules,
+        phaseRules: action.phaseRules,
         loaded: true,
         error: null,
       }
@@ -164,6 +183,13 @@ function reducer(state: LiveState, action: Action): LiveState {
       if (type !== 'CLEARED') return { ...state, forecasts: { ...state.forecasts, [key]: forecast } }
       const { [key]: _removed, ...forecasts } = state.forecasts
       return { ...state, forecasts }
+    }
+    case 'batch':
+      return { ...state, batchStates: { ...state.batchStates, [action.state.equipmentId]: action.state } }
+    case 'shelf': {
+      // 시작과 해제가 같은 id 로 온다. 해제된 것은 목록에서 뺀다
+      const rest = state.shelves.filter((s) => s.id !== action.shelf.id)
+      return { ...state, shelves: action.shelf.releasedAt ? rest : [action.shelf, ...rest] }
     }
     case 'assistant': {
       // 요청(PENDING)과 작성 완료(DONE)가 같은 id 로 온다. 최근 요청 순
@@ -208,6 +234,7 @@ export function useLiveData(): LiveState & {
   updateHandover: (report: HandoverReport) => void
   updateAssistant: (task: AssistantTask) => void
   updateSetpoint: (change: SetpointChange) => void
+  updateShelf: (shelf: AlarmShelf) => void
 } {
   const [state, dispatch] = useReducer(reducer, initialState)
   // POST 응답을 바로 반영한다 (SSE 로도 같은 값이 오지만 기다리지 않게)
@@ -215,6 +242,7 @@ export function useLiveData(): LiveState & {
   const updateHandover = useCallback((report: HandoverReport) => dispatch({ type: 'handover', report }), [])
   const updateAssistant = useCallback((task: AssistantTask) => dispatch({ type: 'assistant', task }), [])
   const updateSetpoint = useCallback((change: SetpointChange) => dispatch({ type: 'setpoint', change }), [])
+  const updateShelf = useCallback((shelf: AlarmShelf) => dispatch({ type: 'shelf', shelf }), [])
 
   useEffect(() => {
     let cancelled = false
@@ -223,8 +251,19 @@ export function useLiveData(): LiveState & {
 
     const loadSnapshot = async () => {
       try {
-        const [readings, alarms, workOrders, handovers, assistantTasks, setpointChanges, forecasts, rules] =
-          await Promise.all([
+        const [
+          readings,
+          alarms,
+          workOrders,
+          handovers,
+          assistantTasks,
+          setpointChanges,
+          forecasts,
+          batchStates,
+          shelves,
+          rules,
+          phaseRules,
+        ] = await Promise.all([
           getJson<Reading[]>(`/api/readings/history?minutes=${WINDOW_MS / 60000}`),
           getJson<Alarm[]>('/api/alarms'),
           getJson<WorkOrder[]>('/api/work-orders'),
@@ -232,7 +271,10 @@ export function useLiveData(): LiveState & {
           getJson<AssistantTask[]>('/api/assistant/tasks'),
           getJson<SetpointChange[]>('/api/setpoint-changes'),
           getJson<Forecast[]>('/api/forecasts'),
+          getJson<BatchState[]>('/api/batch/state'),
+          getJson<AlarmShelf[]>('/api/alarm-shelves'),
           getJson<Rules>('/api/alarm-rules'),
+          getJson<PhaseRules>('/api/alarm-rules/phases'),
         ])
         if (!cancelled) {
           dispatch({
@@ -244,7 +286,10 @@ export function useLiveData(): LiveState & {
             assistantTasks,
             setpointChanges,
             forecasts,
+            batchStates,
+            shelves,
             rules,
+            phaseRules,
           })
         }
       } catch (e) {
@@ -275,6 +320,8 @@ export function useLiveData(): LiveState & {
       source.addEventListener('forecast', (e) => dispatch({ type: 'forecast', message: parse<ForecastEventMessage>(e) }))
       source.addEventListener('assistant', (e) => dispatch({ type: 'assistant', task: parse<AssistantTask>(e) }))
       source.addEventListener('setpoint', (e) => dispatch({ type: 'setpoint', change: parse<SetpointChange>(e) }))
+      source.addEventListener('batch', (e) => dispatch({ type: 'batch', state: parse<BatchState>(e) }))
+      source.addEventListener('shelf', (e) => dispatch({ type: 'shelf', shelf: parse<AlarmShelf>(e) }))
     })
 
     return () => {
@@ -283,5 +330,5 @@ export function useLiveData(): LiveState & {
     }
   }, [])
 
-  return { ...state, updateWorkOrder, updateHandover, updateAssistant, updateSetpoint }
+  return { ...state, updateWorkOrder, updateHandover, updateAssistant, updateSetpoint, updateShelf }
 }

@@ -1,5 +1,7 @@
 package com.factoryagent.backend.alarm;
 
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
+
 import java.util.Optional;
 
 /**
@@ -9,11 +11,25 @@ import java.util.Optional;
  * @param critHigh 이 값 이상이면 CRITICAL
  * @param warnLow  이 값 이하이면 WARNING
  * @param critLow  이 값 이하이면 CRITICAL
+ * @param delay    기준을 넘은 상태가 이 시간(초) 이상 이어져야 알람을 낸다 (null·0 = 바로). 순간적인 튐으로 알람이 나지 않게
  */
-public record Threshold(Double warnHigh, Double critHigh, Double warnLow, Double critLow) {
+public record Threshold(Double warnHigh, Double critHigh, Double warnLow, Double critLow, Integer delay) {
 
     /** 해제 히스테리시스: 경계값에서 5% 더 정상 쪽으로 돌아와야 알람을 해제한다 (경계 부근 깜빡임 방지). */
     static final double CLEAR_MARGIN = 0.05;
+
+    /** application.yml 은 이 생성자(전체 항목)로 묶는다. */
+    @ConstructorBinding
+    public Threshold {
+    }
+
+    public Threshold(Double warnHigh, Double critHigh, Double warnLow, Double critLow) {
+        this(warnHigh, critHigh, warnLow, critLow, null);
+    }
+
+    public int delaySeconds() {
+        return delay == null ? 0 : Math.max(0, delay);
+    }
 
     public Optional<Breach> evaluate(double value) {
         if (critHigh != null && value >= critHigh) {

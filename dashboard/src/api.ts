@@ -30,7 +30,63 @@ export interface Alarm {
   clearedAt: string | null
   /** 추세 예측 경보가 이 알람보다 몇 초 먼저였는지 (예측 없이 발생했으면 null) */
   forecastLeadSeconds: number | null
+  /** 발생 시점의 배치 단계·배치 번호 (가상 PLC 모드에서만, 모르면 null) */
+  batchPhase: string | null
+  batchId: string | null
 }
+
+/** 설비 1대의 현재 배치 상태 (가상 PLC 의 상태 태그) */
+export interface BatchState {
+  equipmentId: string
+  phase: string
+  batchId: string | null
+  recipe: string | null
+  phaseStartedAt: string
+}
+
+export interface PhaseLog {
+  phase: string
+  startedAt: string
+  endedAt: string | null
+  seconds: number | null
+  /** 지표 → [최소, 최대] */
+  metrics: Record<string, [number, number]>
+}
+
+export interface BatchRun {
+  id: number
+  batchId: string
+  equipmentId: string
+  recipe: string | null
+  status: 'RUNNING' | 'COMPLETED'
+  startedAt: string
+  endedAt: string | null
+  phases: PhaseLog[]
+}
+
+export interface BatchRecord {
+  batch: BatchRun
+  alarms: Alarm[]
+  workOrders: WorkOrder[]
+  setpointChanges: SetpointChange[]
+  verdict: { level: 'OK' | 'REVIEW' | 'HOLD' | 'RUNNING'; text: string; alarmCount: number; criticalCount: number; openActions: number }
+}
+
+/** 알람 일시 억제 (정비 중 등). metric 이 null 이면 그 설비 전체 */
+export interface AlarmShelf {
+  id: number
+  equipmentId: string
+  metric: string | null
+  reason: string
+  shelvedBy: string
+  shelvedAt: string
+  untilAt: string
+  releasedBy: string | null
+  releasedAt: string | null
+}
+
+/** 설비 유형 → 지표 → 배치 단계 → 임계값 */
+export type PhaseRules = Record<string, Record<string, Record<string, Threshold>>>
 
 export interface ReferenceDoc {
   manualId: string
@@ -94,8 +150,8 @@ export interface Forecast {
 export interface ForecastEventMessage {
   type: 'RAISED' | 'UPDATED' | 'CLEARED'
   forecast: Forecast
-  /** CLEARED 일 때: ALARM(실제 알람 발생) / RECOVERED(추세가 꺾임) */
-  reason: 'ALARM' | 'RECOVERED' | null
+  /** CLEARED 일 때: ALARM(실제 알람 발생) / RECOVERED(추세가 꺾임) / PHASE(배치 단계가 바뀜) */
+  reason: 'ALARM' | 'RECOVERED' | 'PHASE' | null
   /** ALARM 이면 예측이 실제 알람보다 몇 초 먼저였는지 */
   leadSeconds: number | null
 }
@@ -178,6 +234,8 @@ export interface Threshold {
   critHigh: number | null
   warnLow: number | null
   critLow: number | null
+  /** 기준을 넘은 상태가 이 시간(초) 이어져야 알람 */
+  delay?: number | null
 }
 
 /** 설비 유형 → 지표 → 임계값 */

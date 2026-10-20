@@ -6,6 +6,20 @@ export interface EquipmentInfo {
   metrics: string[]
   /** PLC 설정값(SP) 태그. 가상 PLC 모드에서만 값이 들어온다 (pv: 그 설정값을 따라가는 실제값 지표) */
   setpoints?: { tag: string; label: string; pv?: string }[]
+  /** 값이 들어올 때만 보여 주는 지표 (가상 PLC 모드의 배합기 내용물 온도) */
+  optionalMetrics?: string[]
+}
+
+/** 배치 레시피 단계 (가상 PLC 의 batchPhase). 진행 표시 순서 */
+export const BATCH_PHASES = ['CHARGING', 'HEATING', 'EMULSIFYING', 'COOLING', 'DISCHARGING'] as const
+
+export const PHASE_LABEL: Record<string, string> = {
+  IDLE: '대기',
+  CHARGING: '원료 투입',
+  HEATING: '가열',
+  EMULSIFYING: '유화',
+  COOLING: '냉각',
+  DISCHARGING: '배출',
 }
 
 /** 미니 라인 구성 (python/sensors/virtual_sensors.py 와 같은 설비) */
@@ -25,6 +39,7 @@ export const EQUIPMENT: EquipmentInfo[] = [
     name: '배합기',
     description: '유화·교반',
     metrics: ['vibration', 'current'],
+    optionalMetrics: ['temperature'],
     setpoints: [{ tag: 'speed_sp', label: '교반 회전수', pv: 'speed' }],
   },
   { id: 'FILLER-01', type: 'FILLER', name: '충진기', description: '로터리 액상 충진', metrics: ['speed'] },

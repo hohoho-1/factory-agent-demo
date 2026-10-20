@@ -1,6 +1,7 @@
 package com.factoryagent.backend.telemetry;
 
 import com.factoryagent.backend.alarm.AlarmService;
+import com.factoryagent.backend.batch.BatchStateTracker;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -24,13 +25,15 @@ public class TelemetryService {
     private final SensorReadingRepository repository;
     private final AlarmService alarmService;
     private final ApplicationEventPublisher events;
+    private final BatchStateTracker batches;
 
     public TelemetryService(ObjectMapper objectMapper, SensorReadingRepository repository,
-                            AlarmService alarmService, ApplicationEventPublisher events) {
+                            AlarmService alarmService, ApplicationEventPublisher events, BatchStateTracker batches) {
         this.objectMapper = objectMapper;
         this.repository = repository;
         this.alarmService = alarmService;
         this.events = events;
+        this.batches = batches;
     }
 
     /** MQTT payload(JSON) 1건을 지표별 행으로 펼쳐 저장하고 이상 여부를 판정한다. 형식이 잘못된 메시지는 버린다. */
@@ -58,6 +61,11 @@ public class TelemetryService {
                         units.get(e.getKey()), measuredAt, receivedAt))
                 .toList();
         repository.saveAll(rows);
+        // 배치 단계를 먼저 반영해야 알람 판정이 지금 단계의 기준을 쓴다
+        batches.observe(msg.equipmentId(), msg.state(), measuredAt).ifPresent(e -> {
+            alarmService.onPhaseChange(e);
+            events.publishEvent(e);
+        });
         rows.forEach(alarmService::evaluate);
         events.publishEvent(new ReadingsSavedEvent(rows));
         log.debug("saved {} readings from {}", rows.size(), msg.equipmentId());

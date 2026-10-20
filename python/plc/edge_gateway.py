@@ -4,6 +4,7 @@
 
   OPC UA → MQTT  factory/line1/{설비ID}/telemetry
                  {"equipmentId","type","ts","metrics":{...},"units":{...}}   (가상 센서와 같은 형식)
+                 문자열 상태 태그(배치 단계 등)가 있으면 "state":{"batchPhase","batchId","recipe"} 를 더한다
   MQTT → OPC UA  factory/line1/commands          {"requestId","equipmentId","tag","value"}
   결과 보고      factory/line1/commands/results  {"requestId","equipmentId","tag","requested","status",
                                                    "code","message","before","after","ts"}
@@ -42,7 +43,7 @@ class Tag:
     equipment_id: str
     name: str
     unit: str
-    role: str  # PV / SP
+    role: str  # PV / SP / STATE(문자열 상태)
     node: Node
 
 
@@ -73,14 +74,20 @@ def parse_command(payload: bytes) -> dict:
     return cmd
 
 
-def build_telemetry(eq: Equipment, values: dict[str, float], ts: datetime | None) -> dict:
-    return {
+def build_telemetry(eq: Equipment, values: dict, ts: datetime | None) -> dict:
+    """숫자 태그(PV·SP)는 metrics, 문자열 상태 태그(STATE: 배치 단계 등)는 state 로 나눠 담는다."""
+    numeric = {name: tag for name, tag in eq.tags.items() if tag.role != "STATE"}
+    payload = {
         "equipmentId": eq.equipment_id,
         "type": eq.type,
         "ts": _iso(ts),
-        "metrics": {name: round(values[name], 2) for name in eq.tags if name in values},
-        "units": {name: tag.unit for name, tag in eq.tags.items()},
+        "metrics": {name: round(float(values[name]), 2) for name in numeric if name in values},
+        "units": {name: tag.unit for name, tag in numeric.items()},
     }
+    state = {name: str(values[name]) for name, tag in eq.tags.items() if tag.role == "STATE" and name in values}
+    if state:
+        payload["state"] = state
+    return payload
 
 
 async def browse_line(client: Client) -> dict[str, Equipment]:
@@ -108,14 +115,14 @@ class _Collector:
 
     def __init__(self, by_node: dict[ua.NodeId, Tag]):
         self.by_node = by_node
-        self.values: dict[tuple[str, str], float] = {}
+        self.values: dict[tuple[str, str], float | str] = {}
         self.stamps: dict[str, datetime] = {}
 
     def datachange_notification(self, node: Node, val, data) -> None:
         tag = self.by_node.get(node.nodeid)
         if tag is None or val is None:
             return
-        self.values[(tag.equipment_id, tag.name)] = float(val)
+        self.values[(tag.equipment_id, tag.name)] = str(val) if tag.role == "STATE" else float(val)
         ts = data.monitored_item.Value.SourceTimestamp
         if ts is not None:
             self.stamps[tag.equipment_id] = ts
