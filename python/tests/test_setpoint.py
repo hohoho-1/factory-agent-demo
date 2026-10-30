@@ -168,6 +168,16 @@ class AgentProposalTest(unittest.TestCase):
         self.assertEqual(len(backend.saved_work_orders), 1)
         self.assertIn("422", err.getvalue())
 
+    def test_agent_saves_no_manual_work_order(self):
+        # 근거가 없는 지시서(references 비어 있음)도 저장까지 가야 한다
+        overflow = {**WARNING, "equipmentId": "TANK-01", "equipmentType": "RAW_TANK", "metric": "level",
+                    "unit": "%", "direction": "HIGH", "thresholdValue": 95}
+        backend = FakeBackend([])
+        with redirect_stderr(io.StringIO()), redirect_stdout_quiet():
+            Agent(self.index, backend).handle(overflow, "RAISED")
+        self.assertIn("매뉴얼 없음", backend.saved_work_orders[0]["title"])
+        self.assertEqual(backend.proposals, [])
+
 
 def redirect_stdout_quiet():
     from contextlib import redirect_stdout

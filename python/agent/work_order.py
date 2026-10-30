@@ -170,7 +170,7 @@ def no_manual_order(alarm: dict, hits: list[Hit], history: list[dict], generator
                     f" 자동 조치 지시를 쓰지 않았습니다. 담당자 확인이 필요합니다."),
         "body": body,
         "generator": generator,
-        "references": [_reference(h) for h in hits],
+        "references": [],  # 화면은 references 를 '근거'로 보여 주므로, 근거로 쓰지 않은 검색 결과는 본문에만 둔다
         "causeOptions": [],
         "setpointChange": None,
     }

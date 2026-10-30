@@ -101,6 +101,8 @@ class TemplateGeneratorTest(unittest.TestCase):
         self.assertIn("## 과거 유사 조치 이력", wo["body"])  # 남긴 기록은 그래도 보여 준다
         self.assertNotIn("## 즉시 조치", wo["body"])
         self.assertEqual(wo["causeOptions"], [])
+        self.assertEqual(wo["references"], [])  # 화면의 '근거' 표시에 레벨 저하 매뉴얼이 뜨지 않게
+        self.assertIn("MAN-TANK-LVL-01", wo["body"])  # 가장 비슷했던 문서는 본문에 '근거로 쓰지 않음'으로
         self.assertIsNone(wo["setpointChange"])
 
 

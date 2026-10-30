@@ -155,9 +155,12 @@ class Agent:
         proposal = wo.pop("setpointChange", None)
         # 어느 심각도 기준으로 썼는지 함께 보낸다 (LLM 이 쓰는 동안 알람이 위험으로 올라갈 수 있다)
         wo["severity"] = alarm["severity"]
-        top = wo["references"][0]
         print(f"[AGENT] {event} alarm #{alarm['id']} {alarm['message']}")
-        print(f"        -> {top['manualId']} / {top['section']} (score {top['score']}), generator {wo['generator']}")
+        if wo["references"]:
+            top = wo["references"][0]
+            print(f"        -> {top['manualId']} / {top['section']} (score {top['score']}), generator {wo['generator']}")
+        else:  # 다룰 매뉴얼이 없어 담당자 확인 지시서를 쓴 경우
+            print(f"        -> no manual covers this alarm, generator {wo['generator']}")
         if history:
             print(f"        -> past actions: {len(history)} (latest WO-{history[0]['id']})")
         if proposal:

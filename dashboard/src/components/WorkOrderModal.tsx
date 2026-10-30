@@ -72,28 +72,33 @@ export function WorkOrderModal({ workOrder, setpointChanges, onUpdated, onSetpoi
             <SetpointCard key={c.id} change={c} onUpdated={onSetpointUpdated} />
           ))}
           <ReactMarkdown>{body}</ReactMarkdown>
-          <h2>근거 문서 (RAG 검색 결과)</h2>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>매뉴얼</th>
-                <th>섹션</th>
-                <th className="num">점수</th>
-              </tr>
-            </thead>
-            <tbody>
-              {workOrder.references.map((r) => (
-                <tr key={`${r.manualId}/${r.section}`}>
-                  <td>
-                    <b>{r.manualId}</b>
-                    <div className="muted">{r.title}</div>
-                  </td>
-                  <td>{r.section}</td>
-                  <td className="num">{r.score.toFixed(3)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* 매뉴얼 없음 지시서는 근거가 없다 (가장 비슷했던 문서는 본문에 '근거로 쓰지 않음'으로 나온다) */}
+          {workOrder.references.length > 0 && (
+            <>
+              <h2>근거 문서 (RAG 검색 결과)</h2>
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>매뉴얼</th>
+                    <th>섹션</th>
+                    <th className="num">점수</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {workOrder.references.map((r) => (
+                    <tr key={`${r.manualId}/${r.section}`}>
+                      <td>
+                        <b>{r.manualId}</b>
+                        <div className="muted">{r.title}</div>
+                      </td>
+                      <td>{r.section}</td>
+                      <td className="num">{r.score.toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
           <WorkOrderAction workOrder={workOrder} onUpdated={onUpdated} onDirtyChange={onDirtyChange} />
         </div>
       </div>

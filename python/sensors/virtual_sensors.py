@@ -96,6 +96,8 @@ def build_line():
 SCENARIOS = {
     "tank_overheat": ("TANK-02", "temperature", +1.5, 20),
     "tank_low_level": ("TANK-01", "level", -3.0, 20),
+    # 넘침(레벨 95% 이상 경고): 이 알람을 다루는 매뉴얼이 없어 '매뉴얼 없음, 담당자 확인' 지시서가 나오는 장면
+    "tank_overfill": ("TANK-01", "level", +2.0, 20),
     "mixer_vibration": ("MIXER-01", "vibration", +0.8, 15),
     "mixer_overcurrent": ("MIXER-01", "current", +1.2, 15),
     "filler_slowdown": ("FILLER-01", "speed", -5.0, 15),
