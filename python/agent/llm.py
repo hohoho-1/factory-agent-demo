@@ -21,7 +21,7 @@ from . import setpoint
 from .rag import Hit, Manual, ManualIndex
 from .work_order import (
     EQUIPMENT_KO, METRIC_KO, TemplateGenerator, _fmt, _reference, batch_line, build_query, cause_options,
-    history_section,
+    history_section, no_manual_order,
 )
 
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -241,9 +241,9 @@ class LlmGenerator:
                  setpoints: list[dict] | None = None) -> dict:
         history = history or []
         hits = index.search(build_query(alarm), alarm["equipmentType"], alarm["metric"], k=6)
-        manual = index.best_manual(hits)
-        if manual is None:
-            raise LlmOutputError(f"관련 매뉴얼을 찾지 못했습니다: {build_query(alarm)}")
+        manual = index.manual_for(hits, alarm["equipmentType"], alarm["metric"], alarm["direction"])
+        if manual is None:  # 다룰 매뉴얼이 없으면 Claude 를 부르지 않는다: 근거 없이 쓰게 할 이유가 없다
+            return no_manual_order(alarm, hits, history, TemplateGenerator.name)
 
         options = cause_options(manual.sections.get("가능 원인", ""))
         sources = collect_sources(manual, index, hits, history)

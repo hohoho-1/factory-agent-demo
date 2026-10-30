@@ -33,6 +33,12 @@ class Manual:
     sections: dict[str, str] = field(default_factory=dict)  # 섹션 제목 -> 본문 (문서 순서 유지)
     path: Path | None = None
 
+    def covers(self, equipment_type: str, metric: str, direction: str) -> bool:
+        """이 매뉴얼이 그 알람(설비 유형·지표·방향)을 다루는가. 방향이 비어 있으면 양쪽 모두로 본다."""
+        return (self.equipment_type in (equipment_type, "ALL")
+                and metric in self.metrics
+                and self.direction in ("", direction))
+
 
 @dataclass
 class Chunk:
@@ -114,3 +120,12 @@ class ManualIndex:
         if not totals:
             return None
         return self.manuals[max(totals, key=totals.get)]
+
+    def manual_for(self, hits: list[Hit], equipment_type: str, metric: str, direction: str) -> Manual | None:
+        """
+        best_manual 을 고르되, 그 매뉴얼이 알람을 다루지 않으면 None.
+        검색은 늘 '가장 비슷한' 매뉴얼을 내놓으므로, 탱크 넘침(레벨 HIGH)에 레벨 저하 매뉴얼처럼
+        반대 조치가 담긴 문서를 근거로 쓰지 않게 막는다. (평가셋 eval/alarm_eval_set.json 의 N 문항)
+        """
+        manual = self.best_manual(hits)
+        return manual if manual and manual.covers(equipment_type, metric, direction) else None

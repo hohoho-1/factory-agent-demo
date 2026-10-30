@@ -90,6 +90,19 @@ class TemplateGeneratorTest(unittest.TestCase):
         self.assertLess(body.index("## 과거 유사 조치 이력"), body.index("## 추정 원인"))
         self.assertTrue(wo["summary"].endswith("과거 유사 조치 1건 참고."))
 
+    def test_alarm_without_manual_asks_for_a_person_instead_of_the_opposite_action(self):
+        # 탱크 넘침(레벨 HIGH): 가장 비슷한 문서는 레벨 '저하' 매뉴얼이지만 그 조치(보충)는 반대다
+        overflow = {**ALARM, "equipmentId": "TANK-01", "equipmentType": "RAW_TANK", "metric": "level", "unit": "%",
+                    "severity": "WARNING", "direction": "HIGH", "thresholdValue": 95, "triggerValue": 95.5,
+                    "peakValue": 96.0, "lastValue": 96.0}
+        wo = TemplateGenerator().generate(overflow, self.index, [past(12, "RESOLVED", "레벨계 오지시")])
+        self.assertIn("매뉴얼 없음, 담당자 확인", wo["title"])
+        self.assertIn("- 근거 매뉴얼: 없음", wo["body"])
+        self.assertIn("## 과거 유사 조치 이력", wo["body"])  # 남긴 기록은 그래도 보여 준다
+        self.assertNotIn("## 즉시 조치", wo["body"])
+        self.assertEqual(wo["causeOptions"], [])
+        self.assertIsNone(wo["setpointChange"])
+
 
 if __name__ == "__main__":
     unittest.main()

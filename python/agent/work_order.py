@@ -122,6 +122,60 @@ def history_section(history: list[dict], equipment_id: str | None = None) -> lis
     return lines
 
 
+def alarm_facts(alarm: dict) -> list[str]:
+    """지시서 머리의 설비·지표·심각도·값 줄."""
+    eq_ko = EQUIPMENT_KO.get(alarm["equipmentType"], alarm["equipmentType"])
+    unit = alarm.get("unit") or ""
+    op = ">=" if alarm["direction"] == "HIGH" else "<="
+    return [
+        f"- 설비: {alarm['equipmentId']} ({eq_ko})",
+        f"- 지표: {METRIC_KO.get(alarm['metric'], alarm['metric'])} ({alarm['metric']})",
+        f"- 심각도: {alarm['severity']}",
+        f"- 발생값 {_fmt(alarm['triggerValue'])}{unit} → 현재 {_fmt(alarm['lastValue'])}{unit}"
+        f" (최악 {_fmt(alarm['peakValue'])}{unit}), 기준 {op} {_fmt(alarm['thresholdValue'])}{unit}",
+        f"- 최초 발생: {alarm['raisedAt']}",
+        *batch_line(alarm),
+    ]
+
+
+def no_manual_order(alarm: dict, hits: list[Hit], history: list[dict], generator: str) -> dict:
+    """
+    알람을 다루는 매뉴얼이 없을 때의 지시서: 조치를 지어내지 않고 담당자 확인을 요청한다.
+    가장 비슷했던 문서는 '근거로 쓰지 않음'으로 보여 준다 (매뉴얼을 새로 만들 때 참고).
+    """
+    eq_ko = EQUIPMENT_KO.get(alarm["equipmentType"], alarm["equipmentType"])
+    metric_ko = METRIC_KO.get(alarm["metric"], alarm["metric"])
+    way = "상승" if alarm["direction"] == "HIGH" else "저하"
+    title = f"[{alarm['severity']}] {alarm['equipmentId']} {eq_ko} {metric_ko} {way} — 매뉴얼 없음, 담당자 확인"
+    body = "\n".join([
+        f"# {title}",
+        "",
+        *alarm_facts(alarm),
+        "- 근거 매뉴얼: 없음",
+        "",
+        *history_section(history, alarm["equipmentId"]),
+        "## 해당 매뉴얼 없음",
+        f"{eq_ko} {metric_ko} {way}을 다루는 설비 매뉴얼이 없어 자동 조치 지시를 쓰지 않았습니다.",
+        "설비 담당자가 현장을 직접 확인하고 조치 내용을 남겨 주세요. 남긴 기록은 매뉴얼 보완에 씁니다.",
+        "",
+        "## 안전 주의사항",
+        "- 설비 내부 점검·정비가 필요하면 MAN-SAFE-LOTO-01 의 잠금·표지 절차를 따른다.",
+        "",
+        "## 가장 비슷했던 문서 (근거로 쓰지 않음)",
+        *[f"- {h.chunk.manual.id} / {h.chunk.section} (score {h.score:.3f})" for h in hits[:3]],
+    ])
+    return {
+        "title": title,
+        "summary": (f"{alarm['equipmentId']}({eq_ko}) {metric_ko} {way} 알람을 다루는 매뉴얼이 없어"
+                    f" 자동 조치 지시를 쓰지 않았습니다. 담당자 확인이 필요합니다."),
+        "body": body,
+        "generator": generator,
+        "references": [_reference(h) for h in hits],
+        "causeOptions": [],
+        "setpointChange": None,
+    }
+
+
 class TemplateGenerator:
     name = "template"
 
@@ -130,9 +184,9 @@ class TemplateGenerator:
         history = history or []
         query = build_query(alarm)
         hits = index.search(query, alarm["equipmentType"], alarm["metric"], k=6)
-        manual = index.best_manual(hits)
+        manual = index.manual_for(hits, alarm["equipmentType"], alarm["metric"], alarm["direction"])
         if manual is None:
-            raise RuntimeError(f"관련 매뉴얼을 찾지 못했습니다: {query}")
+            return no_manual_order(alarm, hits, history, self.name)
 
         eq_ko = EQUIPMENT_KO.get(alarm["equipmentType"], alarm["equipmentType"])
         metric_ko = METRIC_KO.get(alarm["metric"], alarm["metric"])
@@ -154,13 +208,7 @@ class TemplateGenerator:
         body = "\n".join([
             f"# {title}",
             "",
-            f"- 설비: {alarm['equipmentId']} ({eq_ko})",
-            f"- 지표: {metric_ko} ({alarm['metric']})",
-            f"- 심각도: {severity}",
-            f"- 발생값 {_fmt(alarm['triggerValue'])}{unit} → 현재 {_fmt(alarm['lastValue'])}{unit}"
-            f" (최악 {_fmt(alarm['peakValue'])}{unit}), 기준 {op} {_fmt(alarm['thresholdValue'])}{unit}",
-            f"- 최초 발생: {alarm['raisedAt']}",
-            *batch_line(alarm),
+            *alarm_facts(alarm),
             f"- 근거 매뉴얼: {manual.id} {manual.title}",
             "",
             *history_section(history, alarm["equipmentId"]),

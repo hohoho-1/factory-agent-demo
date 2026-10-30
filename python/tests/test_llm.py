@@ -86,6 +86,15 @@ class LlmGeneratorTest(unittest.TestCase):
         self.assertEqual(wo["generator"], "template")
         self.assertIn("## 추정 원인", wo["body"])
 
+    def test_alarm_without_manual_does_not_call_claude(self):
+        mixer_hot = {**ALARM, "metric": "temperature", "unit": "C", "direction": "HIGH", "thresholdValue": 82,
+                     "triggerValue": 83, "peakValue": 84, "lastValue": 84}  # 배합기 온도 매뉴얼은 '저하'만 다룬다
+        client = FakeClient()
+        wo = LlmGenerator(client=client, model="m", effort="low").generate(mixer_hot, self.index)
+        self.assertEqual(client.calls, [])
+        self.assertIn("매뉴얼 없음, 담당자 확인", wo["title"])
+        self.assertEqual(wo["generator"], "template")
+
 
 if __name__ == "__main__":
     unittest.main()
