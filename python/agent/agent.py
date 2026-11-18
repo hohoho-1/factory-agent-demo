@@ -29,11 +29,13 @@ import paho.mqtt.client as mqtt
 
 from .assistant import AssistantWriter
 from .handover import HandoverWriter
+from .orchestrator import Orchestrator
 from .rag import ManualIndex, load_manuals
 from .work_order import TemplateGenerator
 
 HANDLED_EVENTS = {"RAISED", "ESCALATED"}
 ENV_FILE = Path(__file__).resolve().parent.parent / ".env"  # python/.env (git 제외)
+DECISION_LOG = Path(__file__).resolve().parents[2] / "logs" / "decisions.jsonl"  # 오케스트레이터 결정 로그 (git 제외)
 
 
 def load_env_file(path: Path = ENV_FILE) -> None:
@@ -126,6 +128,7 @@ class Agent:
         llm = getattr(self.generator, "primary", None)
         self.handover = HandoverWriter(llm)
         self.assistant = AssistantWriter(index, llm)
+        self.orchestrator = Orchestrator(index, backend, self.generator, decision_log=DECISION_LOG, dry_run=dry_run)
 
     def handle_assistant(self, task_id: int) -> None:
         ctx = self.backend.get_assistant_context(task_id)
@@ -149,63 +152,8 @@ class Agent:
         print(f"        -> handover #{report_id} saved: {report['title']}")
 
     def handle(self, alarm: dict, event: str) -> None:
-        history = self._history(alarm)
-        setpoints = self._setpoints(alarm)
-        wo = self.generator.generate(alarm, self.index, history, setpoints)
-        proposal = wo.pop("setpointChange", None)
-        # 어느 심각도 기준으로 썼는지 함께 보낸다 (LLM 이 쓰는 동안 알람이 위험으로 올라갈 수 있다)
-        wo["severity"] = alarm["severity"]
-        print(f"[AGENT] {event} alarm #{alarm['id']} {alarm['message']}")
-        if wo["references"]:
-            top = wo["references"][0]
-            print(f"        -> {top['manualId']} / {top['section']} (score {top['score']}), generator {wo['generator']}")
-        else:  # 다룰 매뉴얼이 없어 담당자 확인 지시서를 쓴 경우
-            print(f"        -> no manual covers this alarm, generator {wo['generator']}")
-        if history:
-            print(f"        -> past actions: {len(history)} (latest WO-{history[0]['id']})")
-        if proposal:
-            print(f"        -> setpoint proposal: {proposal['tag']} {proposal['currentValue']} -> {proposal['proposedValue']}"
-                  f" ({proposal['sources']})")
-        if self.dry_run:
-            print(wo["body"])
-            return
-        saved = self.backend.save_work_order(alarm["id"], wo)
-        print(f"        -> work order #{saved['id']} saved: {saved['title']}")
-        if proposal:
-            self._save_proposal(saved["id"], proposal, wo["generator"])
-
-    def _save_proposal(self, work_order_id: int, proposal: dict, generator: str) -> None:
-        # 백엔드가 운전 범위를 다시 검사한다. 거부되면(422) 지시서만 남고 제안은 없다
-        try:
-            saved = self.backend.save_setpoint_proposal(work_order_id, {
-                "tag": proposal["tag"],
-                "proposedValue": proposal["proposedValue"],
-                "reason": proposal["reason"],
-                "sources": proposal["sources"],
-                "generator": generator,
-            })
-            print(f"        -> setpoint change #{saved['id']} proposed (waiting for approval)")
-        except urllib.error.HTTPError as e:
-            print(f"[AGENT] setpoint proposal rejected by backend: {e.code} {e.read().decode('utf-8', 'replace')}",
-                  file=sys.stderr)
-        except (urllib.error.URLError, ValueError) as e:
-            print(f"[AGENT] setpoint proposal not saved: {e!r}", file=sys.stderr)
-
-    def _setpoints(self, alarm: dict) -> list[dict]:
-        # 설정값 조회가 안 되면 제안 없이 지시서만 쓴다 (기존 가상 센서 모드 등)
-        try:
-            return self.backend.get_setpoints(alarm["equipmentId"])
-        except (urllib.error.URLError, ValueError) as e:
-            print(f"[AGENT] setpoint lookup failed, continuing without proposals: {e!r}", file=sys.stderr)
-            return []
-
-    def _history(self, alarm: dict) -> list[dict]:
-        # 이력 조회가 안 돼도 매뉴얼 기반 지시서는 써야 한다
-        try:
-            return self.backend.get_history(alarm)
-        except (urllib.error.URLError, ValueError) as e:
-            print(f"[AGENT] history lookup failed, continuing without it: {e!r}", file=sys.stderr)
-            return []
+        """알람 1건: 오케스트레이터(라우터 → 진단 → 조치 제안 → 승인 요청)가 처리한다."""
+        self.orchestrator.run(alarm, event)
 
 
 def run_mqtt(agent: Agent, host: str, port: int, topic: str, handover_topic: str, assistant_topic: str) -> None:

@@ -1,0 +1,24 @@
+{
+  "name": "알람 라우터 추가 문항",
+  "version": "1.0",
+  "created": "2026-11-18",
+  "description": "alarm_eval_set.json 20문항에 더해, 경로를 헷갈리기 쉬운 경우만 모은 라우터 전용 문항. 배치 중이지만 설비 이상인 알람, 배치 단계 기준인데 매뉴얼이 없는 알람 등.",
+  "cases": [
+    {"id": "R01", "expectedRoute": "EQUIPMENT", "equipmentId": "MIXER-01", "equipmentType": "MIXER", "metric": "vibration", "direction": "HIGH", "severity": "WARNING", "threshold": 4.5, "value": 5.0, "unit": "mm/s", "batchPhase": "EMULSIFYING",
+     "note": "배치 진행 중이어도 진동은 설비 상태 지표. 단계별 기준도 없다"},
+    {"id": "R02", "expectedRoute": "HANDOFF", "equipmentId": "MIXER-01", "equipmentType": "MIXER", "metric": "temperature", "direction": "HIGH", "severity": "CRITICAL", "threshold": 88, "value": 89.5, "unit": "C", "batchPhase": "EMULSIFYING",
+     "note": "단계별 기준 알람이지만 배합기 온도 매뉴얼은 '저하'만 다룬다 → 배치 경로가 아니라 사람에게"},
+    {"id": "R03", "expectedRoute": "EQUIPMENT", "equipmentId": "MIXER-01", "equipmentType": "MIXER", "metric": "current", "direction": "HIGH", "severity": "WARNING", "threshold": 18, "value": 18.9, "unit": "A", "batchPhase": "EMULSIFYING",
+     "note": "유화 중 점도 상승으로 전류가 오를 수 있으나 기준은 단계와 무관한 설비 기준"},
+    {"id": "R04", "expectedRoute": "PROCESS", "equipmentId": "TANK-02", "equipmentType": "RAW_TANK", "metric": "temperature", "direction": "HIGH", "severity": "WARNING", "threshold": 50, "value": 51.0, "unit": "C", "batchPhase": "HEATING",
+     "note": "배치 중 탱크 온도. 탱크에는 단계별 기준이 없어 공정값 이탈"},
+    {"id": "R05", "expectedRoute": "EQUIPMENT", "equipmentId": "FILLER-01", "equipmentType": "FILLER", "metric": "speed", "direction": "LOW", "severity": "WARNING", "threshold": 100, "value": 96, "unit": "bpm", "batchPhase": "DISCHARGING",
+     "note": "배출 단계 중 충진기 속도 저하는 설비 이상"},
+    {"id": "R06", "expectedRoute": "HANDOFF", "equipmentId": "MIXER-01", "equipmentType": "MIXER", "metric": "temperature", "direction": "HIGH", "severity": "WARNING", "threshold": 50, "value": 52.0, "unit": "C",
+     "note": "배치 단계를 모를 때(상온 기준) 배합기 과열. 다룰 매뉴얼 없음"},
+    {"id": "R07", "expectedRoute": "PROCESS", "equipmentId": "TANK-01", "equipmentType": "RAW_TANK", "metric": "level", "direction": "LOW", "severity": "CRITICAL", "threshold": 15, "value": 13.0, "unit": "%", "batchPhase": "IDLE",
+     "note": "대기 단계는 배치 중이 아닌 것으로 본다"},
+    {"id": "R08", "expectedRoute": "BATCH", "equipmentId": "MIXER-02", "equipmentType": "MIXER", "metric": "temperature", "direction": "LOW", "severity": "WARNING", "threshold": 68, "value": 67.0, "unit": "C", "batchPhase": "EMULSIFYING",
+     "note": "다른 배합기의 유화 온도 부족도 배치 경로"}
+  ]
+}
