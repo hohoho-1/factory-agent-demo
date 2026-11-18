@@ -247,6 +247,9 @@ class Orchestrator:
             state.alarm, self.index, state.history, state.setpoints))
         state.proposal = wo.pop("setpointChange", None)
         state.work_order = wo
+        if getattr(self.generator, "name", None) == "llm" and wo.get("generator") != "llm" and wo.get("references"):
+            # FallbackGenerator 가 LLM 실패를 템플릿으로 덮었다: 지시서는 나갔지만 기록은 남긴다
+            state.decide("LLM 생성기 실패: 매뉴얼 템플릿 지시서로 대체 (원인은 에이전트 콘솔 로그)")
         if not wo.get("references"):
             # 라우터는 매뉴얼이 있다고 봤는데 생성기가 근거를 못 찾은 경우: 사람에게 넘긴 것으로 기록한다
             state.handoff_reason = "생성기가 근거 매뉴얼을 찾지 못함"

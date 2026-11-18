@@ -181,6 +181,19 @@ class FailureTest(unittest.TestCase):
         self.assertEqual([s.status for s in state.log if s.step == "propose"], ["timeout"])
         self.assertEqual(backend.saved[0]["generator"], "handoff")
 
+    def test_llm_fallback_is_recorded(self):
+        from agent.llm import FallbackGenerator
+
+        class BrokenLlm:
+            name = "llm"
+
+            def generate(self, *args):
+                raise RuntimeError("401 invalid x-api-key")
+
+        state = orchestrator(FakeBackend(), FallbackGenerator(BrokenLlm())).run(alarm(), "RAISED")
+        self.assertEqual(state.work_order["generator"], "template")
+        self.assertTrue(any("LLM 생성기 실패" in d for d in state.decisions))
+
     def test_optional_step_failure_degrades(self):
         backend = FakeBackend(history_error=urllib.error.URLError("down"))
         state = orchestrator(backend, history={"timeout": 1, "retries": 1, "required": False}).run(alarm(), "RAISED")

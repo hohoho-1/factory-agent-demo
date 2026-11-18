@@ -119,7 +119,8 @@ class Backend:
 
 
 class Agent:
-    def __init__(self, index: ManualIndex, backend: Backend, dry_run: bool = False, generator=None):
+    def __init__(self, index: ManualIndex, backend: Backend, dry_run: bool = False, generator=None,
+                 decision_log: Path | None = None):
         self.index = index
         self.backend = backend
         self.generator = generator or TemplateGenerator()
@@ -128,7 +129,7 @@ class Agent:
         llm = getattr(self.generator, "primary", None)
         self.handover = HandoverWriter(llm)
         self.assistant = AssistantWriter(index, llm)
-        self.orchestrator = Orchestrator(index, backend, self.generator, decision_log=DECISION_LOG, dry_run=dry_run)
+        self.orchestrator = Orchestrator(index, backend, self.generator, decision_log=decision_log, dry_run=dry_run)
 
     def handle_assistant(self, task_id: int) -> None:
         ctx = self.backend.get_assistant_context(task_id)
@@ -241,7 +242,7 @@ def main() -> int:
     generator = make_generator(args.generator)
     print(f"work order generator: {generator.name}"
           + (f" ({generator.primary.model}, effort {generator.primary.effort})" if generator.name == "llm" else ""))
-    agent = Agent(index, Backend(args.api), dry_run=args.dry_run, generator=generator)
+    agent = Agent(index, Backend(args.api), dry_run=args.dry_run, generator=generator, decision_log=DECISION_LOG)
     if args.alarm_id:
         agent.handle(agent.backend.get_alarm(args.alarm_id), "MANUAL")
         return 0
