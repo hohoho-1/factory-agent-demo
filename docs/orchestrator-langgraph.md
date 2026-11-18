@@ -1,6 +1,6 @@
 # 알람 오케스트레이터: 직접 구현 vs LangGraph
 
-같은 알람 처리 흐름(라우터 → 진단 → 조치 제안 → 승인 요청, 실패하면 사람에게 넘김)을 두 가지로 짜서 비교했다.
+같은 알람 처리 흐름(라우터 → 진단 → 조치 제안 → 품질 판정 → 승인 요청, 실패하면 사람에게 넘김)을 두 가지로 짜서 비교했다.
 
 - 직접 구현: `python/agent/orchestrator.py` 의 `Orchestrator` (데모가 실제로 쓰는 것)
 - LangGraph: `python/agent/orchestrator_graph.py` 의 `build_graph()` (비교용, 데모는 쓰지 않음)
@@ -9,7 +9,7 @@
 
 ## 같은 결과를 내는가
 
-`tests/test_orchestrator_graph.py` 의 동등성 테스트: 평가셋 28문항 × (설정값 없음 / 있음) = 56가지 입력에서 두 구현의 **경로 · 자율성 단계 · 승인 상태 · 결정 로그 · 저장된 지시서 본문 · 설정값 제안**이 모두 같다. 실패 처리(재시도 상한 초과 → handoff, 타임아웃 → handoff)도 같은 결과다.
+`tests/test_orchestrator_graph.py` 의 동등성 테스트: 평가셋 28문항 × (설정값 없음 / 있음) = 56가지 입력에서 두 구현의 **경로 · 자율성 단계 · 승인 상태 · 결정 로그 · 저장된 지시서 본문 · 설정값 제안 · 품질 판정**이 모두 같다 (배치 진행 중 알람 10문항 포함). 실패 처리(재시도 상한 초과 → handoff, 타임아웃 → handoff)도 같은 결과다.
 
 ## 그래프
 
@@ -19,14 +19,22 @@ graph TD;
     route --> diagnose;
     diagnose --> propose;
     propose -. 상한 초과 .-> handoff;
-    propose -. 성공 .-> save;
-    handoff --> save;
+    propose -. 성공 .-> quality;
+    handoff --> quality;
+    quality --> save;
     save -. 설정값 제안 있음 .-> approve;
-    save -. 없음 .-> END([끝]);
-    approve --> END;
+    save -. 제안 없음 · 품질 판정 있음 .-> record_quality;
+    save -. 둘 다 없음 .-> END([끝]);
+    approve -. 품질 판정 있음 .-> record_quality;
+    approve -. 없음 .-> END;
+    record_quality --> END;
 ```
 
-LangGraph 는 이 그림을 코드에서 바로 뽑는다 (`graph.get_graph().draw_mermaid()`). 직접 구현은 같은 그림을 문서로 따로 그려야 한다.
+- `propose`: 지시서 에이전트 (매뉴얼 근거 지시서, 설정값 제안)
+- `quality`: 품질 에이전트 (배치 진행 중 알람만 판정, 아니면 그냥 지나감). 지시서 경로가 정상이든 handoff 든 거친다.
+- `record_quality`: 저장된 지시서 번호로 품질 판정을 남긴다. 홀드면 품질팀 승인 대기.
+
+LangGraph 는 이 그림을 코드에서 바로 뽑는다 (`graph.get_graph().draw_mermaid()`). 직접 구현은 같은 그림을 문서로 따로 그려야 한다. 이 그림도 2026-11-19 품질 에이전트를 붙인 뒤 코드에서 뽑은 엣지에 맞춰 다시 그렸다.
 
 ## 비교
 
@@ -40,7 +48,8 @@ LangGraph 는 이 그림을 코드에서 바로 뽑는다 (`graph.get_graph().dr
 | 사람 승인 대기 | 승인 대기로 저장하고 끝. 승인은 대시보드 → 백엔드가 따로 처리 | `interrupt()` 로 그래프를 멈추고 상태를 체크포인터에 저장, 작업자 결정이 오면 `Command(resume=...)` 로 이어서 끝냄 |
 | 흐름 그림 | 문서로 따로 | 코드에서 자동 생성 |
 | 의존성 | 없음 (표준 라이브러리) | langgraph + langchain-core · pydantic · ormsgpack 등 10여 개 패키지 |
-| 코드 양 (흐름 제어 부분) | 약 215줄 (콘솔 출력 · 결정 로그 파일 포함) | 약 230줄 (콘솔 출력 · 로그 파일 없음, 직접 구현 부품 재사용) |
+| 코드 양 (흐름 제어 부분) | 약 250줄 (콘솔 출력 · 결정 로그 파일 포함) | 약 270줄 (파일 전체, 콘솔 출력 · 로그 파일 없음, 직접 구현 부품 재사용) |
+| 에이전트 추가 (품질 에이전트) | `run()` 에 단계 하나, 출구에 저장 하나 | 노드 둘 + 조건 엣지 셋. 저장 뒤 갈래가 셋(승인 · 품질 저장 · 끝)으로 늘어 그림으로 보는 이점이 커짐 |
 
 ## 판단
 
