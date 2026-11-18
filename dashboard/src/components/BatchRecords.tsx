@@ -3,6 +3,7 @@ import { getJson, type BatchRecord, type BatchRun } from '../api'
 import { EQUIPMENT_BY_ID, METRIC_LABEL, PHASE_LABEL } from '../equipment'
 import { formatDuration, formatTime, formatValue } from '../format'
 import { StatusBadge } from './StatusBadge'
+import { QUALITY_LEVEL_LABEL, QUALITY_STATUS_LABEL } from './QualityCard'
 import { SETPOINT_STATUS_LABEL, withUnit } from './SetpointCard'
 
 interface Props {
@@ -142,6 +143,21 @@ function BatchRecordModal({ id, onClose }: { id: number; onClose: () => void }) 
                       {withUnit(c.valueBefore ?? c.currentValue, c.unit)} → {withUnit(c.proposedValue, c.unit)} ·{' '}
                       {SETPOINT_STATUS_LABEL[c.status]}
                       {c.decidedBy && ` · ${c.origin === 'AI' ? '승인' : '요청'} ${c.decidedBy}`}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <h3 className="record__title">품질 영향 판정 (품질 에이전트)</h3>
+              {(record.qualityAssessments ?? []).length === 0 ? (
+                <p className="muted">배치 중 품질 판정이 없습니다.</p>
+              ) : (
+                <ul className="record__list">
+                  {record.qualityAssessments.map((q) => (
+                    <li key={q.id}>
+                      {formatTime(q.createdAt)} WO-{q.workOrderId} · <b>{QUALITY_LEVEL_LABEL[q.level]}</b> ·{' '}
+                      {QUALITY_STATUS_LABEL[q.status]}
+                      {q.decidedBy && ` · ${q.decidedBy}`}
+                      <div className="muted">{q.basis}</div>
                     </li>
                   ))}
                 </ul>

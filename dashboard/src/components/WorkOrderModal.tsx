@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
-import type { SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
+import type { QualityAssessment, SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
 import { formatTime } from '../format'
+import { QualityCard } from './QualityCard'
 import { SetpointCard } from './SetpointCard'
 import { StatusBadge } from './StatusBadge'
 import { ACTION_SECTION_ID, WorkOrderAction } from './WorkOrderAction'
@@ -17,12 +18,23 @@ interface Props {
   workOrder: WorkOrder
   /** 이 지시서에 딸린 권장 설정값 변경 (없으면 빈 배열) */
   setpointChanges: SetpointChange[]
+  /** 품질 에이전트 판정 (배치 진행 중 알람일 때만) */
+  qualityAssessments: QualityAssessment[]
   onUpdated: (wo: WorkOrder) => void
   onSetpointUpdated: (change: SetpointChange) => void
+  onQualityUpdated: (q: QualityAssessment) => void
   onClose: () => void
 }
 
-export function WorkOrderModal({ workOrder, setpointChanges, onUpdated, onSetpointUpdated, onClose }: Props) {
+export function WorkOrderModal({
+  workOrder,
+  setpointChanges,
+  qualityAssessments,
+  onUpdated,
+  onSetpointUpdated,
+  onQualityUpdated,
+  onClose,
+}: Props) {
   // 조치 내용을 쓰다가 Esc·바깥 클릭으로 닫혀 입력이 사라지지 않게 한 번 묻는다
   const dirtyRef = useRef(false)
   const onDirtyChange = useCallback((dirty: boolean) => {
@@ -70,6 +82,9 @@ export function WorkOrderModal({ workOrder, setpointChanges, onUpdated, onSetpoi
         <div className="modal__body markdown">
           {setpointChanges.map((c) => (
             <SetpointCard key={c.id} change={c} onUpdated={onSetpointUpdated} />
+          ))}
+          {qualityAssessments.map((q) => (
+            <QualityCard key={q.id} assessment={q} onUpdated={onQualityUpdated} />
           ))}
           <ReactMarkdown>{body}</ReactMarkdown>
           {/* 매뉴얼 없음 지시서는 근거가 없다 (가장 비슷했던 문서는 본문에 '근거로 쓰지 않음'으로 나온다) */}

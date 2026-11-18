@@ -7,6 +7,7 @@ import com.factoryagent.backend.batch.BatchPhaseEvent;
 import com.factoryagent.backend.control.SetpointChangeEvent;
 import com.factoryagent.backend.forecast.ForecastEvent;
 import com.factoryagent.backend.handover.HandoverEvent;
+import com.factoryagent.backend.quality.QualityAssessmentEvent;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.workorder.WorkOrderCreatedEvent;
 import com.factoryagent.backend.workorder.WorkOrderUpdatedEvent;
@@ -27,7 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * 대시보드로 실시간 이벤트를 밀어주는 SSE 허브.
- * 이벤트 이름: readings / alarm / forecast / work-order / handover / assistant / setpoint / batch / shelf / ping
+ * 이벤트 이름: readings / alarm / forecast / work-order / handover / assistant / setpoint / quality / batch / shelf / ping
  * 모두 커밋 이후에 보내 화면이 DB 와 어긋나지 않게 한다.
  */
 @Component
@@ -103,6 +104,12 @@ public class LiveStreamHub {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onSetpoint(SetpointChangeEvent e) {
         broadcast("setpoint", e.change());
+    }
+
+    /** 품질 판정 생성 · 품질팀 승인 · 거절. 화면은 id 로 덮어쓴다. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onQuality(QualityAssessmentEvent e) {
+        broadcast("quality", e.assessment());
     }
 
     /** 확인·조치 완료도 같은 이벤트로 보낸다. 화면은 id 로 덮어쓴다. */

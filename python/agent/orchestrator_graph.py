@@ -5,9 +5,9 @@
 흐름 제어만 LangGraph 에 맡긴다. 두 구현이 같은 알람에 같은 경로·자율성 단계를 내는지는
 tests/test_orchestrator_graph.py 가 확인한다. 비교 정리는 docs/orchestrator-langgraph.md.
 
-  START → route ─┬→ diagnose → propose ─┬→ finish → END
-                 │                        └→ handoff → finish
-                 └→ diagnose(이력만) → propose(매뉴얼 없음 지시서) → finish
+  START → route → diagnose → propose ─┬→ quality → save ─┬→ approve ─┬→ record_quality → END
+                                      └→ handoff ─┘        └───────────┴→ END
+  (quality 와 record_quality 는 배치 진행 중 알람에서만 일한다: 두 번째 에이전트인 품질 에이전트)
 
 LangGraph 로 바뀌는 것
 - 흐름이 코드가 아니라 그래프(노드 + 조건 엣지)로 선언된다. graph.get_graph().draw_mermaid() 로 그림이 나온다.
@@ -35,6 +35,7 @@ from langgraph.types import Command, RetryPolicy, interrupt
 
 from .orchestrator import (ALERT, APPROVE, DEFAULT_POLICIES, HANDOFF, RECOMMEND, AlarmState, Route, StepLog,
                            StepPolicy, classify, handoff_order, trace_section)
+from .quality import HOLD as QUALITY_HOLD, QualityAgent, in_batch
 from .rag import ManualIndex
 
 
@@ -50,6 +51,8 @@ class GraphState(TypedDict, total=False):
     approval: str
     handoff_reason: str | None
     failure: str | None          # 조치 제안이 상한을 넘으면 이유가 들어가고, 조건 엣지가 handoff 로 보낸다
+    quality: dict | None
+    quality_status: str
     saved_id: int | None
     log: Annotated[list[StepLog], operator.add]
     decisions: Annotated[list[str], operator.add]
@@ -84,9 +87,10 @@ def _ms(started: float) -> int:
 
 
 def build_graph(index: ManualIndex, backend, generator, policies: dict[str, StepPolicy] | None = None,
-                human_in_loop: bool = False, checkpointer=None):
+                human_in_loop: bool = False, checkpointer=None, quality: QualityAgent | None = None):
     """컴파일한 LangGraph 를 돌려준다. human_in_loop 면 체크포인터가 필요하다 (없으면 메모리 체크포인터)."""
     pol = {**DEFAULT_POLICIES, **(policies or {})}
+    quality_agent = quality or QualityAgent()
 
     # ---------------------------------------------------------- 노드: 바뀐 필드만 돌려준다
 
@@ -151,6 +155,32 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
                 "proposal": None, "autonomy": ALERT, "handoff_reason": reason,
                 "log": [StepLog("handoff", "handoff", 1, 0, reason)], "decisions": [f"사람에게 넘김: {reason}"]}
 
+    def judge_quality(state: GraphState) -> dict:
+        # 두 번째 에이전트. 지시서 경로(정상 · handoff)와 상관없이 배치 중 알람이면 판정한다
+        if not in_batch(state["alarm"]):
+            return {}
+        q, logs, decs, fail = _attempts("quality", lambda: quality_agent.assess(state["alarm"], state.get("work_order")),
+                                        pol["quality"])
+        if fail:
+            logs[-1].status += "→degraded"
+            return {"quality_status": "FAILED", "log": logs,
+                    "decisions": decs + [f"quality 재시도 상한 초과: 그 정보 없이 계속 ({fail})",
+                                         "품질 판정 실패: 품질팀이 직접 확인해야 함"]}
+        return {"quality": q, "log": logs, "decisions": decs + [
+            f"품질 판정 {q['level']}: {q['basis']}" + (" — 품질팀 승인 필요" if q["level"] == QUALITY_HOLD else "")]}
+
+    def record_quality(state: GraphState) -> dict:
+        saved, logs, decs, fail = _attempts(
+            "quality_save", lambda: backend.save_quality_assessment(state["saved_id"], state["quality"]),
+            pol["quality_save"])
+        if fail:
+            logs[-1].status += "→degraded"
+            return {"quality_status": "FAILED", "log": logs,
+                    "decisions": decs + [f"quality_save 재시도 상한 초과: 그 정보 없이 계속 ({fail})",
+                                         "품질 판정 저장 실패: 품질팀이 직접 확인해야 함"]}
+        return {"quality_status": saved["status"], "log": logs,
+                "decisions": decs + [f"품질 판정 #{saved['id']} 저장 ({saved['status']})"]}
+
     def save(state: GraphState) -> dict:
         # 이 노드는 RetryPolicy 가 다시 돌린다. 상한을 넘으면 예외가 그래프 밖으로 나간다
         wo = dict(state["work_order"])
@@ -192,13 +222,24 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
     g.add_node("save", save, retry_policy=RetryPolicy(max_attempts=pol["save"].retries + 1, initial_interval=0.2,
                                                        retry_on=(urllib.error.URLError, OSError)))
     g.add_node("approve", approve)
+    g.add_node("quality", judge_quality)
+    g.add_node("record_quality", record_quality)
     g.add_edge(START, "route")
     g.add_edge("route", "diagnose")
     g.add_edge("diagnose", "propose")
-    g.add_conditional_edges("propose", lambda s: "handoff" if s.get("failure") else "save", ["handoff", "save"])
-    g.add_edge("handoff", "save")
-    g.add_conditional_edges("save", lambda s: "approve" if s.get("proposal") else END, ["approve", END])
-    g.add_edge("approve", END)
+    g.add_conditional_edges("propose", lambda s: "handoff" if s.get("failure") else "quality", ["handoff", "quality"])
+    g.add_edge("handoff", "quality")
+    g.add_edge("quality", "save")
+
+    def after_save(s: GraphState) -> str:
+        if s.get("proposal"):
+            return "approve"
+        return "record_quality" if s.get("quality") else END
+
+    g.add_conditional_edges("save", after_save, ["approve", "record_quality", END])
+    g.add_conditional_edges("approve", lambda s: "record_quality" if s.get("quality") else END,
+                            ["record_quality", END])
+    g.add_edge("record_quality", END)
     if human_in_loop and checkpointer is None:
         checkpointer = InMemorySaver(serde=checkpoint_serde())
     return g.compile(checkpointer=checkpointer)
@@ -212,12 +253,13 @@ def checkpoint_serde() -> JsonPlusSerializer:
 
 def initial_state(alarm: dict, event: str) -> GraphState:
     return {"alarm": alarm, "event": event, "autonomy": ALERT, "approval": "NOT_NEEDED", "proposal": None,
-            "handoff_reason": None, "failure": None, "saved_id": None, "log": [], "decisions": []}
+            "handoff_reason": None, "failure": None, "quality": None, "quality_status": "NOT_NEEDED",
+            "saved_id": None, "log": [], "decisions": []}
 
 
 def _as_alarm_state(s: GraphState) -> AlarmState:
     """처리 기록(trace_section)은 직접 구현의 AlarmState 를 받는다: 같은 문구를 쓰려고 옮겨 담는다."""
-    return AlarmState(alarm=s["alarm"], event=s.get("event", ""), route=s.get("route"),
+    return AlarmState(alarm=s["alarm"], event=s.get("event", ""), route=s.get("route"), quality=s.get("quality"),
                       autonomy=s.get("autonomy", ALERT), handoff_reason=s.get("handoff_reason"),
                       log=list(s.get("log") or []))
 

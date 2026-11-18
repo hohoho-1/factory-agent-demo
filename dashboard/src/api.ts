@@ -69,6 +69,7 @@ export interface BatchRecord {
   alarms: Alarm[]
   workOrders: WorkOrder[]
   setpointChanges: SetpointChange[]
+  qualityAssessments: QualityAssessment[]
   verdict: { level: 'OK' | 'REVIEW' | 'HOLD' | 'RUNNING'; text: string; alarmCount: number; criticalCount: number; openActions: number }
 }
 
@@ -215,6 +216,29 @@ export interface SetpointChange {
   resultCode: string | null
   resultMessage: string | null
   completedAt: string | null
+}
+
+/** 품질 에이전트의 판정. HOLD 는 품질팀이 승인해야 확정된다 (PENDING → APPROVED / REJECTED) */
+export type QualityLevel = 'NO_IMPACT' | 'INSPECT' | 'HOLD'
+export type QualityStatus = 'RECORDED' | 'PENDING' | 'APPROVED' | 'REJECTED'
+
+export interface QualityAssessment {
+  id: number
+  alarmId: number
+  workOrderId: number
+  batchId: string
+  batchPhase: string | null
+  equipmentId: string
+  metric: string
+  level: QualityLevel
+  basis: string
+  reason: string | null
+  generator: string | null
+  status: QualityStatus
+  createdAt: string
+  decidedBy: string | null
+  decidedAt: string | null
+  decisionNote: string | null
 }
 
 export interface ActionStats {

@@ -1,4 +1,5 @@
-import type { SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
+import type { QualityAssessment, SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
+import { QUALITY_LEVEL_LABEL, QUALITY_STATUS_LABEL } from './QualityCard'
 import { formatTime } from '../format'
 import { SETPOINT_STATUS_LABEL, withUnit } from './SetpointCard'
 import { StatusBadge } from './StatusBadge'
@@ -21,6 +22,7 @@ import { OUTCOME_LABEL } from './WorkOrderAction'
 interface Props {
   workOrders: WorkOrder[]
   setpointChanges: SetpointChange[]
+  qualityAssessments: QualityAssessment[]
   onOpen: (wo: WorkOrder) => void
 }
 
@@ -38,7 +40,20 @@ function statusText(wo: WorkOrder): string {
   return STATUS_LABEL[wo.status]
 }
 
-export function WorkOrderPanel({ workOrders, setpointChanges, onOpen }: Props) {
+function QualityLine({ q }: { q: QualityAssessment }) {
+  return (
+    <div className="wo__setpoint">
+      <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{QUALITY_STATUS_LABEL[q.status]}</span>
+      <span>품질: {QUALITY_LEVEL_LABEL[q.level]}</span>
+    </div>
+  )
+}
+
+export function WorkOrderPanel({ workOrders, setpointChanges, qualityAssessments, onOpen }: Props) {
+  const qualityOf = new Map<number, QualityAssessment>()
+  for (const q of qualityAssessments) {
+    if (!qualityOf.has(q.workOrderId)) qualityOf.set(q.workOrderId, q)
+  }
   // 지시서마다 가장 최근 설정값 제안 (목록에 '승인 대기' 등을 표시)
   const proposalOf = new Map<number, SetpointChange>()
   for (const c of setpointChanges) {
@@ -65,6 +80,7 @@ export function WorkOrderPanel({ workOrders, setpointChanges, onOpen }: Props) {
                 </div>
                 {wo.summary && <p className="wo__summary">{wo.summary}</p>}
                 {proposalOf.has(wo.id) && <SetpointLine change={proposalOf.get(wo.id)!} />}
+                {qualityOf.has(wo.id) && <QualityLine q={qualityOf.get(wo.id)!} />}
                 <div className="wo__meta muted">
                   WO-{wo.id} · 알람 #{wo.alarmId} · {formatTime(wo.createdAt)} ·{' '}
                   {GENERATOR_LABEL[wo.generator] ?? wo.generator}

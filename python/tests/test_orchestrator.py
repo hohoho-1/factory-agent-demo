@@ -38,6 +38,7 @@ class FakeBackend:
         self.history_calls = 0
         self.saved = []
         self.proposals = []
+        self.quality = []
 
     def get_history(self, alarm):
         self.history_calls += 1
@@ -51,6 +52,10 @@ class FakeBackend:
     def save_work_order(self, alarm_id, wo):
         self.saved.append(wo)
         return {"id": 100 + len(self.saved), "title": wo["title"]}
+
+    def save_quality_assessment(self, wo_id, assessment):
+        self.quality.append((wo_id, assessment))
+        return {"id": 700 + len(self.quality), "status": "PENDING" if assessment["level"] == "HOLD" else "RECORDED"}
 
     def save_setpoint_proposal(self, wo_id, proposal):
         if self.reject_proposal:
@@ -247,6 +252,64 @@ class DemoScenarioTest(unittest.TestCase):
                                                  unit="C", thresholdValue=50, lastValue=51), [TEMP_SP])
         self.assertEqual((state.route.kind, state.autonomy), (PROCESS, APPROVE))
         self.assertEqual(backend.proposals[0][1]["proposedValue"], 40)
+
+
+class QualityAgentTest(unittest.TestCase):
+    """두 번째 에이전트: 배치 중 알람이면 지시서 다음에 품질 영향을 판정한다."""
+
+    def batch_alarm(self, **kw):
+        base = dict(metric="temperature", direction="LOW", unit="C", thresholdValue=68, lastValue=66,
+                    peakValue=65.5, batchPhase="EMULSIFYING", batchId="B-1119-01")
+        base.update(kw)
+        return alarm(**base)
+
+    def test_no_quality_step_outside_a_batch(self):
+        backend = FakeBackend()
+        state = orchestrator(backend).run(alarm(), "RAISED")
+        self.assertIsNone(state.quality)
+        self.assertEqual(backend.quality, [])
+        self.assertNotIn("quality", [s.step for s in state.log])
+
+    def test_emulsifying_underheat_warning_needs_inspection(self):
+        backend = FakeBackend()
+        state = orchestrator(backend).run(self.batch_alarm(), "RAISED")
+        self.assertEqual(state.quality["level"], "INSPECT")
+        self.assertEqual(state.quality_status, "RECORDED")
+        self.assertEqual(backend.quality[0][0], state.saved_id)  # 지시서 저장 뒤 그 번호로 판정을 남긴다
+        self.assertIn("품질 판정: 추가 검사 필요", backend.saved[0]["body"])
+
+    def test_critical_underheat_asks_quality_team_to_approve_a_hold(self):
+        backend = FakeBackend()
+        state = orchestrator(backend).run(self.batch_alarm(severity="CRITICAL", thresholdValue=62, lastValue=61),
+                                          "ESCALATED")
+        self.assertEqual(state.quality["level"], "HOLD")
+        self.assertEqual(state.quality_status, "PENDING")
+        self.assertIn("(품질팀 승인 대기)", backend.saved[0]["body"])
+        self.assertTrue(any("품질팀 승인 필요" in d for d in state.decisions))
+
+    def test_quality_is_judged_even_when_the_alarm_is_handed_off(self):
+        # 유화 중 과열: 매뉴얼이 없어 지시서는 사람에게 넘기지만, 품질 기준으로는 홀드 권고
+        backend = FakeBackend()
+        state = orchestrator(backend).run(self.batch_alarm(direction="HIGH", severity="CRITICAL",
+                                                           thresholdValue=88, lastValue=89), "RAISED")
+        self.assertEqual(state.route.kind, HANDOFF)
+        self.assertEqual(state.quality["level"], "HOLD")
+
+    def test_filler_speed_during_discharge_has_no_quality_impact(self):
+        state = orchestrator(FakeBackend()).run(alarm(equipmentId="FILLER-01", equipmentType="FILLER", metric="speed",
+                                                      direction="LOW", unit="bpm", thresholdValue=100, lastValue=95,
+                                                      batchPhase="DISCHARGING", batchId="B-1"), "RAISED")
+        self.assertEqual(state.quality["level"], "NO_IMPACT")
+
+    def test_quality_save_failure_is_recorded(self):
+        class Broken(FakeBackend):
+            def save_quality_assessment(self, wo_id, assessment):
+                raise urllib.error.URLError("down")
+
+        state = orchestrator(Broken(), quality_save={"timeout": 1, "retries": 0, "required": False}).run(
+            self.batch_alarm(), "RAISED")
+        self.assertEqual(state.quality_status, "FAILED")
+        self.assertTrue(any("품질 판정 저장 실패" in d for d in state.decisions))
 
 
 if __name__ == "__main__":

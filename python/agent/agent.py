@@ -30,6 +30,7 @@ import paho.mqtt.client as mqtt
 from .assistant import AssistantWriter
 from .handover import HandoverWriter
 from .orchestrator import Orchestrator
+from .quality import QualityAgent
 from .rag import ManualIndex, load_manuals
 from .work_order import TemplateGenerator
 
@@ -89,6 +90,9 @@ class Backend:
     def save_setpoint_proposal(self, work_order_id: int, proposal: dict) -> dict:
         return self._post(f"/api/work-orders/{work_order_id}/setpoint-changes", proposal)
 
+    def save_quality_assessment(self, work_order_id: int, assessment: dict) -> dict:
+        return self._post(f"/api/work-orders/{work_order_id}/quality-assessments", assessment)
+
     def get_handover_context(self, report_id: int) -> dict:
         with urllib.request.urlopen(f"{self.base_url}/api/handover-reports/{report_id}/context", timeout=5) as r:
             return json.load(r)
@@ -129,7 +133,8 @@ class Agent:
         llm = getattr(self.generator, "primary", None)
         self.handover = HandoverWriter(llm)
         self.assistant = AssistantWriter(index, llm)
-        self.orchestrator = Orchestrator(index, backend, self.generator, decision_log=decision_log, dry_run=dry_run)
+        self.orchestrator = Orchestrator(index, backend, self.generator, decision_log=decision_log, dry_run=dry_run,
+                                         quality=QualityAgent(llm))
 
     def handle_assistant(self, task_id: int) -> None:
         ctx = self.backend.get_assistant_context(task_id)

@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .quality import LEVEL_KO, HOLD as QUALITY_HOLD, QualityAgent, in_batch
 from .rag import ManualIndex
 from .work_order import EQUIPMENT_KO, METRIC_KO, alarm_facts, build_query, history_section
 
@@ -104,6 +105,8 @@ class AlarmState:
     autonomy: str = ALERT                          # 이 건의 자율성 단계
     approval: str = "NOT_NEEDED"                  # NOT_NEEDED / PENDING (작업자 승인 대기) / REJECTED (백엔드 검사 거부)
     handoff_reason: str | None = None
+    quality: dict | None = None                   # 품질 에이전트: 배치 중 알람의 품질 영향 판정
+    quality_status: str = "NOT_NEEDED"            # NOT_NEEDED / RECORDED / PENDING (품질팀 승인 대기) / FAILED
     saved_id: int | None = None
     log: list[StepLog] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
@@ -126,6 +129,8 @@ DEFAULT_POLICIES = {
     "setpoints": StepPolicy(timeout=6, retries=1, required=False),
     "propose": StepPolicy(timeout=150, retries=1, required=True),
     "save": StepPolicy(timeout=10, retries=2, required=True),
+    "quality": StepPolicy(timeout=90, retries=0, required=False),
+    "quality_save": StepPolicy(timeout=10, retries=2, required=False),
 }
 
 
@@ -179,6 +184,10 @@ def trace_section(state: AlarmState) -> list[str]:
                  + (" (설정값 변경은 작업자 승인 후 설비에 반영)" if state.autonomy == APPROVE else ""))
     if state.handoff_reason:
         lines.append(f"- 사람에게 넘긴 이유: {state.handoff_reason}")
+    if state.quality:
+        q = state.quality
+        lines.append(f"- 품질 판정: {LEVEL_KO[q['level']]} — {q['basis']}"
+                     + (" (품질팀 승인 대기)" if q["level"] == QUALITY_HOLD else ""))
     steps = " → ".join(f"{s.step} {s.status}" + (f"({s.attempt}회)" if s.attempt > 1 else "") for s in state.log)
     lines.append(f"- 단계: {steps}")
     return lines
@@ -189,15 +198,17 @@ def trace_section(state: AlarmState) -> list[str]:
 
 class Orchestrator:
     """
-    backend 는 get_history / get_setpoints / save_work_order / save_setpoint_proposal 을 가진 객체
-    (agent.Backend 또는 테스트용 가짜). generator 는 generate(alarm, index, history, setpoints) 를 가진 생성기.
+    backend 는 get_history / get_setpoints / save_work_order / save_setpoint_proposal / save_quality_assessment 를
+    가진 객체 (agent.Backend 또는 테스트용 가짜). generator 는 generate(alarm, index, history, setpoints) 를 가진 생성기.
+    quality 는 배치 중 알람의 품질 영향을 판정하는 두 번째 에이전트 (없으면 템플릿 설명만 쓰는 QualityAgent).
     """
 
     def __init__(self, index: ManualIndex, backend, generator, policies: dict[str, StepPolicy] | None = None,
-                 decision_log: Path | None = None, dry_run: bool = False, out=print):
+                 decision_log: Path | None = None, dry_run: bool = False, out=print, quality: QualityAgent | None = None):
         self.index = index
         self.backend = backend
         self.generator = generator
+        self.quality = quality or QualityAgent()
         self.policies = {**DEFAULT_POLICIES, **(policies or {})}
         self.decision_log = decision_log
         self.dry_run = dry_run
@@ -215,6 +226,7 @@ class Orchestrator:
             self._propose(state)
         except StepFailed as e:
             self._handoff(state, f"{e.step} 단계 실패 — {e.reason}")
+        self._judge_quality(state)
         self._approve_and_finish(state)
         return state
 
@@ -271,8 +283,35 @@ class Orchestrator:
         state.log.append(StepLog("handoff", "handoff", 1, 0, reason))
         state.decide(f"사람에게 넘김: {reason}")
 
+    def _judge_quality(self, state: AlarmState) -> None:
+        """
+        두 번째 에이전트: 배치 진행 중 알람이면 품질 영향을 판정한다. 지시서 경로와 상관없이 한다
+        (매뉴얼이 없어 사람에게 넘긴 알람도 배치 품질에는 영향이 있을 수 있다).
+        """
+        if not in_batch(state.alarm):
+            return
+        q = self._step(state, "quality", lambda: self.quality.assess(state.alarm, state.work_order), default=None)
+        if q is None:
+            state.quality_status = "FAILED"
+            state.decide("품질 판정 실패: 품질팀이 직접 확인해야 함")
+            return
+        state.quality = q
+        state.decide(f"품질 판정 {q['level']}: {q['basis']}"
+                     + (" — 품질팀 승인 필요" if q["level"] == QUALITY_HOLD else ""))
+
+    def _record_quality(self, state: AlarmState, work_order_id: int) -> None:
+        saved = self._step(state, "quality_save",
+                           lambda: self.backend.save_quality_assessment(work_order_id, state.quality), default=None)
+        if saved is None:
+            state.quality_status = "FAILED"
+            state.decide("품질 판정 저장 실패: 품질팀이 직접 확인해야 함")
+            return
+        state.quality_status = saved["status"]
+        state.decide(f"품질 판정 #{saved['id']} 저장 ({saved['status']})")
+        self.out(f"        -> quality assessment #{saved['id']} {state.quality['level']} ({saved['status']})")
+
     def _approve_and_finish(self, state: AlarmState) -> None:
-        """단일 출구: 지시서 저장 → (제안이 있으면) 승인 요청 → 결정 로그."""
+        """단일 출구: 지시서 저장 → (제안이 있으면) 승인 요청 → (배치 중이면) 품질 판정 저장 → 결정 로그."""
         wo = state.work_order
         wo["severity"] = state.alarm["severity"]  # LLM 이 쓰는 동안 알람 심각도가 바뀔 수 있다
         wo["body"] = wo["body"] + "\n" + "\n".join(trace_section(state))
@@ -293,6 +332,8 @@ class Orchestrator:
         self.out(f"        -> work order #{saved['id']} saved: {saved['title']}")
         if state.proposal:
             self._request_approval(state, saved["id"])
+        if state.quality:
+            self._record_quality(state, saved["id"])
         self._write_decisions(state)
 
     def _request_approval(self, state: AlarmState, work_order_id: int) -> None:
@@ -365,6 +406,8 @@ class Orchestrator:
             self.out(f"        -> {top['manualId']} / {top['section']} (score {top['score']}), generator {wo['generator']}")
         else:
             self.out(f"        -> no manual-based order ({state.handoff_reason}), generator {wo['generator']}")
+        if state.quality:
+            self.out(f"        -> quality {state.quality['level']} ({state.quality['basis']}), generator {state.quality['generator']}")
         if state.history:
             self.out(f"        -> past actions: {len(state.history)} (latest WO-{state.history[0]['id']})")
         if state.proposal:
@@ -384,6 +427,8 @@ class Orchestrator:
             "route": state.route.kind if state.route else None,
             "autonomy": state.autonomy,
             "approval": state.approval,
+            "quality": state.quality["level"] if state.quality else None,
+            "qualityStatus": state.quality_status,
             "handoffReason": state.handoff_reason,
             "workOrderId": state.saved_id,
             "generator": state.work_order["generator"] if state.work_order else None,

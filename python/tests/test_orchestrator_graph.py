@@ -50,6 +50,9 @@ class ParityTest(unittest.TestCase):
                     self.assertEqual(s2["decisions"], s1.decisions)
                     self.assertEqual(b2.saved[0]["body"], b1.saved[0]["body"])
                     self.assertEqual(b2.proposals, b1.proposals)
+                    self.assertEqual(s2["quality"], s1.quality)
+                    self.assertEqual(s2["quality_status"], s1.quality_status)
+                    self.assertEqual(b2.quality, b1.quality)
 
 
 @unittest.skipUnless(HAVE_LANGGRAPH, "langgraph 미설치")

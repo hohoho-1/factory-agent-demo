@@ -5,6 +5,8 @@ import com.factoryagent.backend.alarm.AlarmRepository;
 import com.factoryagent.backend.alarm.Severity;
 import com.factoryagent.backend.control.SetpointChange;
 import com.factoryagent.backend.control.SetpointChangeRepository;
+import com.factoryagent.backend.quality.QualityAssessment;
+import com.factoryagent.backend.quality.QualityAssessmentRepository;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.telemetry.SensorReading;
 import com.factoryagent.backend.workorder.WorkOrder;
@@ -40,21 +42,25 @@ public class BatchRecordService {
     private final AlarmRepository alarms;
     private final WorkOrderRepository workOrders;
     private final SetpointChangeRepository setpoints;
+    private final QualityAssessmentRepository quality;
     /** 설비 → 지표 → [최소, 최대] (진행 중인 단계) */
     private final Map<String, Map<String, double[]>> ranges = new ConcurrentHashMap<>();
 
     public BatchRecordService(BatchRunRepository runs, BatchStateTracker tracker, AlarmRepository alarms,
-                              WorkOrderRepository workOrders, SetpointChangeRepository setpoints) {
+                              WorkOrderRepository workOrders, SetpointChangeRepository setpoints,
+                              QualityAssessmentRepository quality) {
         this.runs = runs;
         this.tracker = tracker;
         this.alarms = alarms;
         this.workOrders = workOrders;
         this.setpoints = setpoints;
+        this.quality = quality;
     }
 
-    /** 배치 기록 한 장: 배치, 단계, 배치 중 알람과 조치, 설정값 변경, 판정 요약. */
+    /** 배치 기록 한 장: 배치, 단계, 배치 중 알람과 조치, 설정값 변경, 품질 판정, 판정 요약. */
     public record BatchRecord(BatchRun batch, List<Alarm> alarms, List<WorkOrder> workOrders,
-                              List<SetpointChange> setpointChanges, Verdict verdict) {
+                              List<SetpointChange> setpointChanges, List<QualityAssessment> qualityAssessments,
+                              Verdict verdict) {
     }
 
     /**
@@ -118,11 +124,40 @@ public class BatchRecordService {
             List<WorkOrder> orders = during.isEmpty() ? List.of()
                     : workOrders.findByAlarmIdInOrderByCreatedAt(during.stream().map(Alarm::getId).toList());
             List<SetpointChange> changes = setpoints.findByCreatedAtBetweenOrderByCreatedAt(run.getStartedAt(), to);
-            return new BatchRecord(run, during, orders, changes, verdict(run, during, orders));
+            List<QualityAssessment> assessments = quality.findByBatchIdOrderByCreatedAt(run.getBatchId());
+            return new BatchRecord(run, during, orders, changes, assessments, verdict(run, during, orders, assessments));
         });
     }
 
     static Verdict verdict(BatchRun run, List<Alarm> during, List<WorkOrder> orders) {
+        return verdict(run, during, orders, List.of());
+    }
+
+    /**
+     * 품질팀이 홀드를 승인했으면 조치 여부와 상관없이 HOLD(출하 보류).
+     * 품질 에이전트의 홀드 권고가 승인 대기 중이면 HOLD(품질팀 판정 대기).
+     */
+    static Verdict verdict(BatchRun run, List<Alarm> during, List<WorkOrder> orders,
+                           List<QualityAssessment> assessments) {
+        Verdict base = baseVerdict(run, during, orders);
+        if (run.getStatus() == BatchRun.Status.RUNNING) {
+            return base;
+        }
+        long approvedHolds = assessments.stream().filter(q -> q.getLevel() == QualityAssessment.Level.HOLD
+                && q.getStatus() == QualityAssessment.Status.APPROVED).count();
+        long pendingHolds = assessments.stream().filter(q -> q.getStatus() == QualityAssessment.Status.PENDING).count();
+        if (approvedHolds > 0) {
+            return new Verdict("HOLD", "품질팀이 배치 홀드를 승인함. 출하 보류", base.alarmCount(), base.criticalCount(),
+                    base.openActions());
+        }
+        if (pendingHolds > 0) {
+            return new Verdict("HOLD", "품질 에이전트 홀드 권고 " + pendingHolds + "건, 품질팀 판정 대기", base.alarmCount(),
+                    base.criticalCount(), base.openActions());
+        }
+        return base;
+    }
+
+    private static Verdict baseVerdict(BatchRun run, List<Alarm> during, List<WorkOrder> orders) {
         int critical = (int) during.stream().filter(a -> a.getSeverity() == Severity.CRITICAL).count();
         Map<Long, Boolean> handled = new HashMap<>();
         for (WorkOrder w : orders) {

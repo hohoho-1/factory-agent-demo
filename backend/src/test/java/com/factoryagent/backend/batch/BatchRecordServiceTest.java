@@ -5,6 +5,7 @@ import com.factoryagent.backend.alarm.AlarmRepository;
 import com.factoryagent.backend.alarm.Severity;
 import com.factoryagent.backend.alarm.Threshold;
 import com.factoryagent.backend.control.SetpointChangeRepository;
+import com.factoryagent.backend.quality.QualityAssessment;
 import com.factoryagent.backend.telemetry.ReadingsSavedEvent;
 import com.factoryagent.backend.telemetry.SensorReading;
 import com.factoryagent.backend.workorder.WorkOrder;
@@ -32,7 +33,8 @@ class BatchRecordServiceTest {
     private final BatchRunRepository runs = mock(BatchRunRepository.class);
     private final BatchStateTracker tracker = new BatchStateTracker();
     private final BatchRecordService service = new BatchRecordService(runs, tracker, mock(AlarmRepository.class),
-            mock(WorkOrderRepository.class), mock(SetpointChangeRepository.class));
+            mock(WorkOrderRepository.class), mock(SetpointChangeRepository.class),
+            mock(com.factoryagent.backend.quality.QualityAssessmentRepository.class));
     private final Map<String, BatchRun> stored = new HashMap<>();
 
     BatchRecordServiceTest() {
@@ -107,5 +109,20 @@ class BatchRecordServiceTest {
         wo.complete("kim", "스팀 밸브 고착", "밸브 교체", com.factoryagent.backend.workorder.ActionOutcome.RESOLVED,
                 T0.plusSeconds(150));
         assertThat(BatchRecordService.verdict(run, List.of(alarm), List.of(wo)).level()).isEqualTo("REVIEW");
+
+        // 조치를 마쳤어도 품질 에이전트의 홀드 권고가 있으면 품질팀 판정 대기, 승인하면 출하 보류
+        QualityAssessment q = QualityAssessment.create(5L, 9L, "B-1", "EMULSIFYING", "MIXER-01", "temperature",
+                QualityAssessment.Level.HOLD, "유화 온도 위험 이탈", "이유", "template", T0.plusSeconds(95));
+        BatchRecordService.Verdict pending = BatchRecordService.verdict(run, List.of(alarm), List.of(wo), List.of(q));
+        assertThat(pending.level()).isEqualTo("HOLD");
+        assertThat(pending.text()).contains("품질팀 판정 대기");
+        q.approve("qa-lee", T0.plusSeconds(300));
+        assertThat(BatchRecordService.verdict(run, List.of(alarm), List.of(wo), List.of(q)).text())
+                .contains("품질팀이 배치 홀드를 승인");
+
+        QualityAssessment inspect = QualityAssessment.create(5L, 9L, "B-1", "EMULSIFYING", "MIXER-01", "temperature",
+                QualityAssessment.Level.INSPECT, "유화 온도 경고 이탈", "이유", "template", T0.plusSeconds(95));
+        assertThat(BatchRecordService.verdict(run, List.of(alarm), List.of(wo), List.of(inspect)).level())
+                .isEqualTo("REVIEW");
     }
 }

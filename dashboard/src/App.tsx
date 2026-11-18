@@ -158,7 +158,12 @@ export default function App() {
               now={now}
               onOpenWorkOrder={setOpenWo}
             />
-            <WorkOrderPanel workOrders={live.workOrders} setpointChanges={live.setpointChanges} onOpen={setOpenWo} />
+            <WorkOrderPanel
+              workOrders={live.workOrders}
+              setpointChanges={live.setpointChanges}
+              qualityAssessments={live.qualityAssessments}
+              onOpen={setOpenWo}
+            />
           </div>
         </aside>
         <div className="full">
@@ -179,8 +184,10 @@ export default function App() {
         <WorkOrderModal
           workOrder={openWo}
           setpointChanges={live.setpointChanges.filter((c) => c.workOrderId === openWo.id)}
+          qualityAssessments={live.qualityAssessments.filter((q) => q.workOrderId === openWo.id)}
           onUpdated={live.updateWorkOrder}
           onSetpointUpdated={live.updateSetpoint}
+          onQualityUpdated={live.updateQuality}
           onClose={() => setOpenWoId(null)}
         />
       )}

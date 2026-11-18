@@ -1286,3 +1286,61 @@ p {
   margin-top: 14px;
   font-size: 12px;
 }
+
+/* ---- 품질 에이전트 판정 ---- */
+.quality {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.quality--inspect {
+  border-color: color-mix(in srgb, var(--status-warning) 55%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 7%, transparent);
+}
+
+.quality--hold {
+  border-color: color-mix(in srgb, var(--status-critical) 50%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 5%, transparent);
+}
+
+.quality--rejected {
+  border-style: dashed;
+}
+
+.quality__level {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-top: 8px;
+}
+
+.quality__badge {
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.quality__badge--no_impact {
+  color: var(--status-good);
+}
+
+.quality__badge--hold {
+  color: var(--status-critical);
+}
+
+.quality-chip--pending {
+  background: color-mix(in srgb, var(--status-critical) 16%, transparent);
+}
+
+.quality-chip--approved {
+  background: color-mix(in srgb, var(--status-critical) 24%, transparent);
+  font-weight: 600;
+}
+
+.quality-chip--recorded,
+.quality-chip--rejected {
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+}

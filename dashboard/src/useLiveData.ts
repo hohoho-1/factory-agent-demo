@@ -13,6 +13,7 @@ import {
   type Reading,
   type Rules,
   type SetpointChange,
+  type QualityAssessment,
   type WorkOrder,
 } from './api'
 
@@ -42,6 +43,8 @@ export interface LiveState {
   assistantTasks: AssistantTask[]
   /** 설정값 변경 제안 · 승인 · 결과 (최근 순) */
   setpointChanges: SetpointChange[]
+  /** 품질 에이전트 판정 (최근 순) */
+  qualityAssessments: QualityAssessment[]
   /** 진행 중인 예측 경보 (seriesKey → 예측). 실제 알람으로 이어지면 알람의 forecastLeadSeconds 에 남는다 */
   forecasts: Record<string, Forecast>
   /** 설비 → 현재 배치 단계 (가상 PLC 모드에서만) */
@@ -64,6 +67,7 @@ type Action =
       handovers: HandoverReport[]
       assistantTasks: AssistantTask[]
       setpointChanges: SetpointChange[]
+      qualityAssessments: QualityAssessment[]
       forecasts: Forecast[]
       batchStates: BatchState[]
       shelves: AlarmShelf[]
@@ -72,6 +76,7 @@ type Action =
     }
   | { type: 'forecast'; message: ForecastEventMessage }
   | { type: 'setpoint'; change: SetpointChange }
+  | { type: 'quality'; assessment: QualityAssessment }
   | { type: 'batch'; state: BatchState }
   | { type: 'shelf'; shelf: AlarmShelf }
   | { type: 'assistant'; task: AssistantTask }
@@ -90,6 +95,7 @@ const initialState: LiveState = {
   handovers: [],
   assistantTasks: [],
   setpointChanges: [],
+  qualityAssessments: [],
   forecasts: {},
   batchStates: {},
   shelves: [],
@@ -156,6 +162,7 @@ function reducer(state: LiveState, action: Action): LiveState {
         handovers: action.handovers,
         assistantTasks: action.assistantTasks,
         setpointChanges: action.setpointChanges,
+        qualityAssessments: action.qualityAssessments,
         forecasts: Object.fromEntries(action.forecasts.map((f) => [seriesKey(f.equipmentId, f.metric), f])),
         batchStates: Object.fromEntries(action.batchStates.map((b) => [b.equipmentId, b])),
         shelves: action.shelves,
@@ -210,6 +217,16 @@ function reducer(state: LiveState, action: Action): LiveState {
         .slice(0, MAX_SETPOINT_CHANGES)
       return { ...state, setpointChanges }
     }
+    case 'quality': {
+      // 판정 생성 → 품질팀 승인 · 거절이 같은 id 로 온다. 결정된 것을 승인 대기로 되돌리지 않는다
+      const existing = state.qualityAssessments.find((q) => q.id === action.assessment.id)
+      if (existing && existing.status !== 'PENDING' && action.assessment.status === 'PENDING') return state
+      const rest = state.qualityAssessments.filter((q) => q.id !== action.assessment.id)
+      const qualityAssessments = [action.assessment, ...rest]
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+        .slice(0, 50)
+      return { ...state, qualityAssessments }
+    }
     case 'handover': {
       // 요청(PENDING)과 작성 완료(DONE)가 같은 id 로 온다. 최근 요청 순, 10건까지
       const rest = state.handovers.filter((h) => h.id !== action.report.id)
@@ -234,6 +251,7 @@ export function useLiveData(): LiveState & {
   updateHandover: (report: HandoverReport) => void
   updateAssistant: (task: AssistantTask) => void
   updateSetpoint: (change: SetpointChange) => void
+  updateQuality: (assessment: QualityAssessment) => void
   updateShelf: (shelf: AlarmShelf) => void
 } {
   const [state, dispatch] = useReducer(reducer, initialState)
@@ -242,6 +260,10 @@ export function useLiveData(): LiveState & {
   const updateHandover = useCallback((report: HandoverReport) => dispatch({ type: 'handover', report }), [])
   const updateAssistant = useCallback((task: AssistantTask) => dispatch({ type: 'assistant', task }), [])
   const updateSetpoint = useCallback((change: SetpointChange) => dispatch({ type: 'setpoint', change }), [])
+  const updateQuality = useCallback(
+    (assessment: QualityAssessment) => dispatch({ type: 'quality', assessment }),
+    [],
+  )
   const updateShelf = useCallback((shelf: AlarmShelf) => dispatch({ type: 'shelf', shelf }), [])
 
   useEffect(() => {
@@ -258,6 +280,7 @@ export function useLiveData(): LiveState & {
           handovers,
           assistantTasks,
           setpointChanges,
+          qualityAssessments,
           forecasts,
           batchStates,
           shelves,
@@ -270,6 +293,7 @@ export function useLiveData(): LiveState & {
           getJson<HandoverReport[]>('/api/handover-reports'),
           getJson<AssistantTask[]>('/api/assistant/tasks'),
           getJson<SetpointChange[]>('/api/setpoint-changes'),
+          getJson<QualityAssessment[]>('/api/quality-assessments'),
           getJson<Forecast[]>('/api/forecasts'),
           getJson<BatchState[]>('/api/batch/state'),
           getJson<AlarmShelf[]>('/api/alarm-shelves'),
@@ -285,6 +309,7 @@ export function useLiveData(): LiveState & {
             handovers,
             assistantTasks,
             setpointChanges,
+            qualityAssessments,
             forecasts,
             batchStates,
             shelves,
@@ -320,6 +345,9 @@ export function useLiveData(): LiveState & {
       source.addEventListener('forecast', (e) => dispatch({ type: 'forecast', message: parse<ForecastEventMessage>(e) }))
       source.addEventListener('assistant', (e) => dispatch({ type: 'assistant', task: parse<AssistantTask>(e) }))
       source.addEventListener('setpoint', (e) => dispatch({ type: 'setpoint', change: parse<SetpointChange>(e) }))
+      source.addEventListener('quality', (e) =>
+        dispatch({ type: 'quality', assessment: parse<QualityAssessment>(e) }),
+      )
       source.addEventListener('batch', (e) => dispatch({ type: 'batch', state: parse<BatchState>(e) }))
       source.addEventListener('shelf', (e) => dispatch({ type: 'shelf', shelf: parse<AlarmShelf>(e) }))
     })
@@ -330,5 +358,5 @@ export function useLiveData(): LiveState & {
     }
   }, [])
 
-  return { ...state, updateWorkOrder, updateHandover, updateAssistant, updateSetpoint, updateShelf }
+  return { ...state, updateWorkOrder, updateHandover, updateAssistant, updateSetpoint, updateQuality, updateShelf }
 }
