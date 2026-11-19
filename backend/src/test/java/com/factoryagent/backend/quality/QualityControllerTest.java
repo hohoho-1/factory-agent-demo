@@ -83,6 +83,39 @@ class QualityControllerTest {
     }
 
     @Test
+    void verdictFirstThenExplanationLinksTheWorkOrder() {
+        alarm(true);
+        // 알람 직후: 지시서 없이 판정부터. 홀드면 바로 승인 대기
+        QualityAssessment q = (QualityAssessment) controller.createForAlarm(5L, new QualityController.AssessmentRequest(
+                "HOLD", "유화 단계 온도 위험 이탈", "템플릿 설명", "template")).getBody();
+        assertThat(q.getWorkOrderId()).isNull();
+        assertThat(q.getStatus()).isEqualTo(QualityAssessment.Status.PENDING);
+
+        // 품질팀은 설명을 기다리지 않고 승인할 수 있다
+        when(repository.findById(3L)).thenReturn(Optional.of(q));
+        controller.approve(3L, new QualityController.DecisionRequest("qa-lee", null));
+
+        // 지시서가 나오면 연결하고 설명만 바꾼다. 판정과 승인은 그대로
+        controller.explain(3L, new QualityController.ExplanationRequest(9L, "Claude 설명", "llm"));
+        assertThat(q.getWorkOrderId()).isEqualTo(9L);
+        assertThat(q.getReason()).isEqualTo("Claude 설명");
+        assertThat(q.getGenerator()).isEqualTo("llm");
+        assertThat(q.getLevel()).isEqualTo(QualityAssessment.Level.HOLD);
+        assertThat(q.getStatus()).isEqualTo(QualityAssessment.Status.APPROVED);
+    }
+
+    @Test
+    void explanationRejectsAWorkOrderOfAnotherAlarm() {
+        alarm(true);
+        QualityAssessment q = QualityAssessment.create(77L, null, "B-1", "EMULSIFYING", "MIXER-01", "temperature",
+                QualityAssessment.Level.INSPECT, "b", "r", "template", T0);
+        when(repository.findById(4L)).thenReturn(Optional.of(q));
+        assertThat(controller.explain(4L, new QualityController.ExplanationRequest(9L, "x", "llm")).getStatusCode())
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(q.getWorkOrderId()).isNull();
+    }
+
+    @Test
     void rejectsAlarmsOutsideABatchAndBadInput() {
         alarm(false);
         assertThat(controller.create(9L, new QualityController.AssessmentRequest("HOLD", "b", null, null))

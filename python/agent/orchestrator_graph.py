@@ -5,9 +5,10 @@
 흐름 제어만 LangGraph 에 맡긴다. 두 구현이 같은 알람에 같은 경로·자율성 단계를 내는지는
 tests/test_orchestrator_graph.py 가 확인한다. 비교 정리는 docs/orchestrator-langgraph.md.
 
-  START → route → diagnose → propose ─┬→ quality → save ─┬→ approve ─┬→ record_quality → END
-                                      └→ handoff ─┘        └───────────┴→ END
-  (quality 와 record_quality 는 배치 진행 중 알람에서만 일한다: 두 번째 에이전트인 품질 에이전트)
+  START → quality → route → diagnose → propose ─┬→ save ─┬→ approve ─┬→ finish_quality → END
+                                                └→ handoff ┘          └───────────┴→ END
+  (quality 와 finish_quality 는 배치 진행 중 알람에서만 일한다: 두 번째 에이전트인 품질 에이전트.
+   급한 판단 먼저: quality 가 맨 앞에서 규칙 판정을 바로 저장하고, finish_quality 가 지시서 뒤에 설명 · 연결)
 
 LangGraph 로 바뀌는 것
 - 흐름이 코드가 아니라 그래프(노드 + 조건 엣지)로 선언된다. graph.get_graph().draw_mermaid() 로 그림이 나온다.
@@ -53,6 +54,7 @@ class GraphState(TypedDict, total=False):
     failure: str | None          # 조치 제안이 상한을 넘으면 이유가 들어가고, 조건 엣지가 handoff 로 보낸다
     quality: dict | None
     quality_status: str
+    quality_id: int | None
     saved_id: int | None
     log: Annotated[list[StepLog], operator.add]
     decisions: Annotated[list[str], operator.add]
@@ -106,8 +108,7 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
         out["log"] += logs
         out["decisions"] += decs
         if fail:
-            logs[-1].status += "→degraded"
-            out["decisions"].append(f"history 재시도 상한 초과: 그 정보 없이 계속 ({fail})")
+            out["decisions"].append(degraded("history", logs))
         out["history"] = history or []
         if state["route"].kind == HANDOFF:
             out["log"].append(StepLog("setpoints", "skipped", 0, 0, "사람에게 넘기는 건은 설정값 제안 안 함"))
@@ -118,8 +119,7 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
         out["log"] += logs
         out["decisions"] += decs
         if fail:
-            logs[-1].status += "→degraded"
-            out["decisions"].append(f"setpoints 재시도 상한 초과: 그 정보 없이 계속 ({fail})")
+            out["decisions"].append(degraded("setpoints", logs))
         out["setpoints"] = setpoints or []
         return out
 
@@ -155,31 +155,58 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
                 "proposal": None, "autonomy": ALERT, "handoff_reason": reason,
                 "log": [StepLog("handoff", "handoff", 1, 0, reason)], "decisions": [f"사람에게 넘김: {reason}"]}
 
+    def degraded(name: str, logs: list[StepLog]) -> str:
+        # 직접 구현의 _step 과 같은 문구 (동등성 테스트가 결정 로그까지 비교한다)
+        logs[-1].status += "→degraded"
+        return f"{name} 재시도 상한 초과: 그 정보 없이 계속 ({logs[-1].note})"
+
     def judge_quality(state: GraphState) -> dict:
-        # 두 번째 에이전트. 지시서 경로(정상 · handoff)와 상관없이 배치 중 알람이면 판정한다
+        # 두 번째 에이전트, 급한 판단 먼저: 규칙 판정을 맨 앞에서 바로 저장한다 (지시서 경로와 무관)
         if not in_batch(state["alarm"]):
             return {}
-        q, logs, decs, fail = _attempts("quality", lambda: quality_agent.assess(state["alarm"], state.get("work_order")),
-                                        pol["quality"])
+        q, logs, decs, fail = _attempts("quality", lambda: quality_agent.judge_first(state["alarm"]), pol["quality"])
         if fail:
-            logs[-1].status += "→degraded"
             return {"quality_status": "FAILED", "log": logs,
-                    "decisions": decs + [f"quality 재시도 상한 초과: 그 정보 없이 계속 ({fail})",
-                                         "품질 판정 실패: 품질팀이 직접 확인해야 함"]}
-        return {"quality": q, "log": logs, "decisions": decs + [
-            f"품질 판정 {q['level']}: {q['basis']}" + (" — 품질팀 승인 필요" if q["level"] == QUALITY_HOLD else "")]}
+                    "decisions": decs + [degraded("quality", logs), "품질 판정 실패: 품질팀이 직접 확인해야 함"]}
+        decs = decs + [f"품질 판정 {q['level']}: {q['basis']}"
+                       + (" — 품질팀 승인 필요" if q["level"] == QUALITY_HOLD else "")]
+        saved, logs2, decs2, fail = _attempts(
+            "quality_save", lambda: backend.save_quality_for_alarm(state["alarm"]["id"], q), pol["quality_save"])
+        logs, decs = logs + logs2, decs + decs2
+        if fail:
+            return {"quality": q, "log": logs,
+                    "decisions": decs + [degraded("quality_save", logs), "품질 판정 즉시 저장 실패: 지시서 저장 뒤 다시 저장"]}
+        return {"quality": q, "quality_id": saved["id"], "quality_status": saved["status"], "log": logs,
+                "decisions": decs + [f"품질 판정 #{saved['id']} 즉시 저장 ({saved['status']}, 지시서보다 먼저)"]}
 
-    def record_quality(state: GraphState) -> dict:
-        saved, logs, decs, fail = _attempts(
-            "quality_save", lambda: backend.save_quality_assessment(state["saved_id"], state["quality"]),
-            pol["quality_save"])
+    def finish_quality(state: GraphState) -> dict:
+        # 지시서가 나온 뒤: LLM 설명(지시서 요약 포함)을 쓰고 판정에 지시서를 연결한다
+        wo_id = state["saved_id"]
+        explanation, logs, decs, fail = _attempts(
+            "quality_explain", lambda: quality_agent.explain(state["alarm"], state.get("work_order")),
+            pol["quality_explain"])
         if fail:
-            logs[-1].status += "→degraded"
-            return {"quality_status": "FAILED", "log": logs,
-                    "decisions": decs + [f"quality_save 재시도 상한 초과: 그 정보 없이 계속 ({fail})",
-                                         "품질 판정 저장 실패: 품질팀이 직접 확인해야 함"]}
-        return {"quality_status": saved["status"], "log": logs,
-                "decisions": decs + [f"품질 판정 #{saved['id']} 저장 ({saved['status']})"]}
+            decs = decs + [degraded("quality_explain", logs)]
+        if state.get("quality_id") is None:
+            payload = {**state["quality"], **(explanation or {})}
+            saved, logs2, decs2, fail = _attempts(
+                "quality_save", lambda: backend.save_quality_assessment(wo_id, payload), pol["quality_save"])
+            logs, decs = logs + logs2, decs + decs2
+            if fail:
+                return {"quality_status": "FAILED", "log": logs,
+                        "decisions": decs + [degraded("quality_save", logs), "품질 판정 저장 실패: 품질팀이 직접 확인해야 함"]}
+            return {"quality_id": saved["id"], "quality_status": saved["status"], "log": logs,
+                    "decisions": decs + [f"품질 판정 #{saved['id']} 저장 ({saved['status']})"]}
+        qid = state["quality_id"]
+        _, logs2, decs2, fail = _attempts(
+            "quality_link", lambda: backend.explain_quality(qid, {"workOrderId": wo_id, **(explanation or {})}),
+            pol["quality_link"])
+        logs, decs = logs + logs2, decs + decs2
+        if fail:
+            return {"log": logs, "decisions": decs + [degraded("quality_link", logs),
+                                                      "품질 판정에 지시서 연결 실패: 판정은 알람 기준으로 남아 있음"]}
+        return {"log": logs, "decisions": decs + [
+            f"품질 판정 #{qid}에 WO 연결" + (f", {explanation['generator']} 설명 추가" if explanation else ", 템플릿 설명 유지")]}
 
     def save(state: GraphState) -> dict:
         # 이 노드는 RetryPolicy 가 다시 돌린다. 상한을 넘으면 예외가 그래프 밖으로 나간다
@@ -223,23 +250,23 @@ def build_graph(index: ManualIndex, backend, generator, policies: dict[str, Step
                                                        retry_on=(urllib.error.URLError, OSError)))
     g.add_node("approve", approve)
     g.add_node("quality", judge_quality)
-    g.add_node("record_quality", record_quality)
-    g.add_edge(START, "route")
+    g.add_node("finish_quality", finish_quality)
+    g.add_edge(START, "quality")
+    g.add_edge("quality", "route")
     g.add_edge("route", "diagnose")
     g.add_edge("diagnose", "propose")
-    g.add_conditional_edges("propose", lambda s: "handoff" if s.get("failure") else "quality", ["handoff", "quality"])
-    g.add_edge("handoff", "quality")
-    g.add_edge("quality", "save")
+    g.add_conditional_edges("propose", lambda s: "handoff" if s.get("failure") else "save", ["handoff", "save"])
+    g.add_edge("handoff", "save")
 
     def after_save(s: GraphState) -> str:
         if s.get("proposal"):
             return "approve"
-        return "record_quality" if s.get("quality") else END
+        return "finish_quality" if s.get("quality") else END
 
-    g.add_conditional_edges("save", after_save, ["approve", "record_quality", END])
-    g.add_conditional_edges("approve", lambda s: "record_quality" if s.get("quality") else END,
-                            ["record_quality", END])
-    g.add_edge("record_quality", END)
+    g.add_conditional_edges("save", after_save, ["approve", "finish_quality", END])
+    g.add_conditional_edges("approve", lambda s: "finish_quality" if s.get("quality") else END,
+                            ["finish_quality", END])
+    g.add_edge("finish_quality", END)
     if human_in_loop and checkpointer is None:
         checkpointer = InMemorySaver(serde=checkpoint_serde())
     return g.compile(checkpointer=checkpointer)
@@ -253,7 +280,7 @@ def checkpoint_serde() -> JsonPlusSerializer:
 
 def initial_state(alarm: dict, event: str) -> GraphState:
     return {"alarm": alarm, "event": event, "autonomy": ALERT, "approval": "NOT_NEEDED", "proposal": None,
-            "handoff_reason": None, "failure": None, "quality": None, "quality_status": "NOT_NEEDED",
+            "handoff_reason": None, "failure": None, "quality": None, "quality_status": "NOT_NEEDED", "quality_id": None,
             "saved_id": None, "log": [], "decisions": []}
 
 

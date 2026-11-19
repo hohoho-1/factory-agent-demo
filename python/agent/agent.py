@@ -93,6 +93,14 @@ class Backend:
     def save_quality_assessment(self, work_order_id: int, assessment: dict) -> dict:
         return self._post(f"/api/work-orders/{work_order_id}/quality-assessments", assessment)
 
+    def save_quality_for_alarm(self, alarm_id: int, assessment: dict) -> dict:
+        """급한 판단 먼저: 지시서 없이 알람 기준으로 품질 판정을 저장한다."""
+        return self._post(f"/api/alarms/{alarm_id}/quality-assessments", assessment)
+
+    def explain_quality(self, assessment_id: int, explanation: dict) -> dict:
+        """지시서가 나온 뒤 판정에 지시서를 연결하고 설명을 바꾼다. {'workOrderId','reason'?,'generator'?}"""
+        return self._post(f"/api/quality-assessments/{assessment_id}/explanation", explanation)
+
     def get_handover_context(self, report_id: int) -> dict:
         with urllib.request.urlopen(f"{self.base_url}/api/handover-reports/{report_id}/context", timeout=5) as r:
             return json.load(r)

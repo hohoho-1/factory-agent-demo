@@ -39,6 +39,8 @@ class FakeBackend:
         self.saved = []
         self.proposals = []
         self.quality = []
+        self.explanations = []
+        self.events = []
 
     def get_history(self, alarm):
         self.history_calls += 1
@@ -56,6 +58,16 @@ class FakeBackend:
     def save_quality_assessment(self, wo_id, assessment):
         self.quality.append((wo_id, assessment))
         return {"id": 700 + len(self.quality), "status": "PENDING" if assessment["level"] == "HOLD" else "RECORDED"}
+
+    def save_quality_for_alarm(self, alarm_id, assessment):
+        # 지시서 없이 먼저 저장: 이 시점에 지시서가 아직 없어야 한다
+        self.events.append(("quality_first", len(self.saved)))
+        self.quality.append((None, dict(assessment)))
+        return {"id": 700 + len(self.quality), "status": "PENDING" if assessment["level"] == "HOLD" else "RECORDED"}
+
+    def explain_quality(self, assessment_id, explanation):
+        self.explanations.append((assessment_id, explanation))
+        return {"id": assessment_id}
 
     def save_setpoint_proposal(self, wo_id, proposal):
         if self.reject_proposal:
@@ -275,8 +287,26 @@ class QualityAgentTest(unittest.TestCase):
         state = orchestrator(backend).run(self.batch_alarm(), "RAISED")
         self.assertEqual(state.quality["level"], "INSPECT")
         self.assertEqual(state.quality_status, "RECORDED")
-        self.assertEqual(backend.quality[0][0], state.saved_id)  # 지시서 저장 뒤 그 번호로 판정을 남긴다
+        # 급한 판단 먼저: 판정은 지시서보다 먼저(지시서 0건일 때) 알람 기준으로 저장되고,
+        # 지시서가 나오면 그 번호가 판정에 연결된다
+        self.assertEqual(backend.events[0], ("quality_first", 0))
+        self.assertEqual(backend.explanations, [(state.quality_id, {"workOrderId": state.saved_id})])
         self.assertIn("품질 판정: 추가 검사 필요", backend.saved[0]["body"])
+
+    def test_llm_explanation_is_attached_after_the_work_order(self):
+        from agent.quality import QualityAgent
+        from tests.test_quality import FakeLlm
+
+        backend = FakeBackend()
+        llm = FakeLlm({"reason": "유화 온도가 기준 아래로 내려갔습니다.", "refs": ["Q1", "Q2", "Q3"]})
+        orch = Orchestrator(INDEX, backend, TemplateGenerator(), quality=QualityAgent(llm), out=lambda *_: None)
+        state = orch.run(self.batch_alarm(), "RAISED")
+        self.assertEqual(backend.quality[0][1]["generator"], "template")  # 먼저 나간 판정은 템플릿 설명
+        explanation = backend.explanations[0][1]
+        self.assertEqual(explanation["generator"], "llm")
+        self.assertIn("(근거: Q1, Q2, Q3)", explanation["reason"])
+        self.assertIn("설비 조치 지시서 요약", llm.prompt)  # 설명은 지시서 요약(Q3)까지 보고 쓴다
+        self.assertEqual([s.step for s in state.log][:2], ["quality", "quality_save"])
 
     def test_critical_underheat_asks_quality_team_to_approve_a_hold(self):
         backend = FakeBackend()
@@ -301,8 +331,23 @@ class QualityAgentTest(unittest.TestCase):
                                                       batchPhase="DISCHARGING", batchId="B-1"), "RAISED")
         self.assertEqual(state.quality["level"], "NO_IMPACT")
 
+    def test_early_save_failure_falls_back_to_saving_with_the_work_order(self):
+        class EarlyDown(FakeBackend):
+            def save_quality_for_alarm(self, alarm_id, assessment):
+                raise urllib.error.URLError("down")
+
+        backend = EarlyDown()
+        state = orchestrator(backend, quality_save={"timeout": 1, "retries": 0, "required": False}).run(
+            self.batch_alarm(), "RAISED")
+        self.assertEqual(backend.quality[0][0], state.saved_id)  # 지시서 번호로 다시 저장
+        self.assertEqual(state.quality_status, "RECORDED")
+        self.assertTrue(any("즉시 저장 실패" in d for d in state.decisions))
+
     def test_quality_save_failure_is_recorded(self):
         class Broken(FakeBackend):
+            def save_quality_for_alarm(self, alarm_id, assessment):
+                raise urllib.error.URLError("down")
+
             def save_quality_assessment(self, wo_id, assessment):
                 raise urllib.error.URLError("down")
 

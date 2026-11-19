@@ -15,26 +15,28 @@
 
 ```mermaid
 graph TD;
-    START([시작]) --> route;
+    START([시작]) --> quality;
+    quality --> route;
     route --> diagnose;
     diagnose --> propose;
     propose -. 상한 초과 .-> handoff;
-    propose -. 성공 .-> quality;
-    handoff --> quality;
-    quality --> save;
+    propose -. 성공 .-> save;
+    handoff --> save;
     save -. 설정값 제안 있음 .-> approve;
-    save -. 제안 없음 · 품질 판정 있음 .-> record_quality;
+    save -. 제안 없음 · 품질 판정 있음 .-> finish_quality;
     save -. 둘 다 없음 .-> END([끝]);
-    approve -. 품질 판정 있음 .-> record_quality;
+    approve -. 품질 판정 있음 .-> finish_quality;
     approve -. 없음 .-> END;
-    record_quality --> END;
+    finish_quality --> END;
 ```
 
-- `propose`: 지시서 에이전트 (매뉴얼 근거 지시서, 설정값 제안)
-- `quality`: 품질 에이전트 (배치 진행 중 알람만 판정, 아니면 그냥 지나감). 지시서 경로가 정상이든 handoff 든 거친다.
-- `record_quality`: 저장된 지시서 번호로 품질 판정을 남긴다. 홀드면 품질팀 승인 대기.
+- `quality`: 품질 에이전트의 **규칙 판정을 맨 앞에서** 하고 바로 저장한다 (배치 진행 중 알람만, 몇 ms). 홀드면 지시서를 기다리지 않고 품질팀 승인 대기가 된다 ("급한 판단 먼저").
+- `propose`: 지시서 에이전트 (매뉴얼 근거 지시서, 설정값 제안, LLM 약 10초)
+- `finish_quality`: 지시서가 나온 뒤 Claude 가 지시서 요약까지 보고 판정 이유를 쓰고, 판정에 지시서를 연결한다. 판정을 먼저 저장하지 못했으면 여기서 지시서 번호로 저장한다.
 
-LangGraph 는 이 그림을 코드에서 바로 뽑는다 (`graph.get_graph().draw_mermaid()`). 직접 구현은 같은 그림을 문서로 따로 그려야 한다. 이 그림도 2026-11-19 품질 에이전트를 붙인 뒤 코드에서 뽑은 엣지에 맞춰 다시 그렸다.
+품질 판정은 다른 단계의 결과가 필요 없고, 이유 설명만 지시서 요약이 필요하다. 그래서 판정과 설명을 나눠 판정은 맨 앞, 설명은 맨 뒤에 두었다 (실측: 판정이 지시서보다 약 10초 먼저 화면에 뜬다).
+
+LangGraph 는 이 그림을 코드에서 바로 뽑는다 (`graph.get_graph().draw_mermaid()`). 직접 구현은 같은 그림을 문서로 따로 그려야 한다. 이 그림은 2026-11-19 "급한 판단 먼저"로 바꾼 뒤 코드에서 뽑은 엣지에 맞춰 다시 그렸다.
 
 ## 비교
 

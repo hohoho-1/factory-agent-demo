@@ -1,24 +1,37 @@
-import type { Alarm, Forecast, WorkOrder } from '../api'
+import type { Alarm, Forecast, QualityAssessment, WorkOrder } from '../api'
 import { displayUnit, EQUIPMENT_BY_ID, METRIC_LABEL, PHASE_LABEL } from '../equipment'
 import { formatDuration, formatTime, formatValue } from '../format'
 import { seriesKey, type SeriesMap } from '../useLiveData'
 import { forecastText } from './EquipmentCard'
+import { QualityInline } from './QualityCard'
 import { StatusBadge } from './StatusBadge'
 
 interface Props {
   forecasts: Record<string, Forecast>
   alarms: Alarm[]
   workOrders: WorkOrder[]
+  /** 품질 판정은 알람 직후 지시서보다 먼저 저장된다: 알람 카드에서 바로 보이고 승인할 수 있다 */
+  qualityAssessments: QualityAssessment[]
   series: SeriesMap
   now: number
   onOpenWorkOrder: (wo: WorkOrder) => void
+  onQualityUpdated: (q: QualityAssessment) => void
 }
 
 /**
  * 현재 활성 알람. 심각도 높은 순, 같은 심각도는 최근 발생 순.
  * 알람 이벤트는 발생·상승·해제 때만 오므로, 현재값·최악값은 실시간 측정값으로 보정해 보여 준다.
  */
-export function AlarmPanel({ forecasts, alarms, workOrders, series, now, onOpenWorkOrder }: Props) {
+export function AlarmPanel({
+  forecasts,
+  alarms,
+  workOrders,
+  qualityAssessments,
+  series,
+  now,
+  onOpenWorkOrder,
+  onQualityUpdated,
+}: Props) {
   const active = alarms
     .filter((a) => a.status === 'ACTIVE')
     .sort((a, b) =>
@@ -66,6 +79,8 @@ export function AlarmPanel({ forecasts, alarms, workOrders, series, now, onOpenW
           {active.map((a) => {
             const unit = displayUnit(a.unit)
             const latestWo = workOrders.find((w) => w.alarmId === a.id)
+            // 같은 알람의 판정이 경고 · 위험 두 건일 수 있다: 가장 최근 것 (목록은 최근 순)
+            const quality = qualityAssessments.find((q) => q.alarmId === a.id)
             const points = series[seriesKey(a.equipmentId, a.metric)] ?? []
             const current = points.length ? points[points.length - 1].v : a.lastValue
             const peak = a.direction === 'HIGH' ? Math.max(a.peakValue, current) : Math.min(a.peakValue, current)
@@ -90,6 +105,7 @@ export function AlarmPanel({ forecasts, alarms, workOrders, series, now, onOpenW
                 {a.forecastLeadSeconds != null && (
                   <div className="alarm__lead">◆ 발생 {a.forecastLeadSeconds}초 전에 추세로 예측됨</div>
                 )}
+                {quality && <QualityInline assessment={quality} raisedAt={a.raisedAt} onUpdated={onQualityUpdated} />}
                 <div className="alarm__foot">
                   <span className="muted">#{a.id} · {formatTime(a.raisedAt)} 발생</span>
                   {latestWo ? (

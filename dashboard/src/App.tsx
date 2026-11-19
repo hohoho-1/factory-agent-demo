@@ -154,9 +154,11 @@ export default function App() {
               forecasts={live.forecasts}
               alarms={live.alarms}
               workOrders={live.workOrders}
+              qualityAssessments={live.qualityAssessments}
               series={live.series}
               now={now}
               onOpenWorkOrder={setOpenWo}
+              onQualityUpdated={live.updateQuality}
             />
             <WorkOrderPanel
               workOrders={live.workOrders}
@@ -184,7 +186,10 @@ export default function App() {
         <WorkOrderModal
           workOrder={openWo}
           setpointChanges={live.setpointChanges.filter((c) => c.workOrderId === openWo.id)}
-          qualityAssessments={live.qualityAssessments.filter((q) => q.workOrderId === openWo.id)}
+          qualityAssessments={live.qualityAssessments.filter(
+            // 판정은 지시서보다 먼저 저장되고 나중에 연결된다. 연결 전이면 같은 알람의 판정을 보여 준다
+            (q) => q.workOrderId === openWo.id || (q.workOrderId == null && q.alarmId === openWo.alarmId),
+          )}
           onUpdated={live.updateWorkOrder}
           onSetpointUpdated={live.updateSetpoint}
           onQualityUpdated={live.updateQuality}

@@ -167,6 +167,23 @@ class QualityAgent:
     def __init__(self, llm=None):
         self.llm = llm
 
+    def judge_first(self, alarm: dict) -> dict | None:
+        """급한 판단 먼저: 규칙 판정과 템플릿 설명만 (LLM 없이, 몇 ms). 배치 중이 아니면 None."""
+        if not in_batch(alarm):
+            return None
+        j = judge(alarm)
+        return {"level": j.level, "basis": j.basis, "reason": template_reason(alarm, j), "generator": "template"}
+
+    def explain(self, alarm: dict, work_order: dict | None) -> dict | None:
+        """지시서가 나온 뒤 덧붙일 LLM 설명 {'reason','generator'}. LLM 이 없거나 실패하면 None (템플릿 설명 유지)."""
+        if self.llm is None or not in_batch(alarm):
+            return None
+        try:
+            return {"reason": llm_reason(self.llm, alarm, work_order, judge(alarm)), "generator": "llm"}
+        except Exception as e:  # noqa: BLE001 - 설명이 실패해도 판정은 이미 나갔다
+            print(f"[QUALITY] llm explanation failed, keeping template: {e!r}")
+            return None
+
     def assess(self, alarm: dict, work_order: dict | None) -> dict | None:
         """배치 중이 아니면 None. 판정은 {'level','basis','reason','generator'} (백엔드 저장 형식)."""
         if not in_batch(alarm):

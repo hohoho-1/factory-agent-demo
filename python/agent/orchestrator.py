@@ -107,6 +107,7 @@ class AlarmState:
     handoff_reason: str | None = None
     quality: dict | None = None                   # 품질 에이전트: 배치 중 알람의 품질 영향 판정
     quality_status: str = "NOT_NEEDED"            # NOT_NEEDED / RECORDED / PENDING (품질팀 승인 대기) / FAILED
+    quality_id: int | None = None                 # 알람 직후 먼저 저장한 품질 판정 번호
     saved_id: int | None = None
     log: list[StepLog] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
@@ -129,8 +130,11 @@ DEFAULT_POLICIES = {
     "setpoints": StepPolicy(timeout=6, retries=1, required=False),
     "propose": StepPolicy(timeout=150, retries=1, required=True),
     "save": StepPolicy(timeout=10, retries=2, required=True),
-    "quality": StepPolicy(timeout=90, retries=0, required=False),
+    # 품질: 규칙 판정(몇 ms) → 바로 저장 → 지시서 뒤에 LLM 설명(수 초) → 판정에 지시서 연결
+    "quality": StepPolicy(timeout=5, retries=0, required=False),
     "quality_save": StepPolicy(timeout=10, retries=2, required=False),
+    "quality_explain": StepPolicy(timeout=90, retries=0, required=False),
+    "quality_link": StepPolicy(timeout=10, retries=2, required=False),
 }
 
 
@@ -220,13 +224,15 @@ class Orchestrator:
 
     def run(self, alarm: dict, event: str) -> AlarmState:
         state = AlarmState(alarm=alarm, event=event)
+        # 급한 판단 먼저: 품질 규칙 판정은 다른 단계의 결과가 필요 없어 맨 앞에서 몇 ms 만에 저장한다.
+        # 홀드면 지시서(LLM, 약 11초)를 기다리지 않고 바로 품질팀 승인 대기가 된다
+        self._judge_quality(state)
         try:
             self._route(state)
             self._diagnose(state)
             self._propose(state)
         except StepFailed as e:
             self._handoff(state, f"{e.step} 단계 실패 — {e.reason}")
-        self._judge_quality(state)
         self._approve_and_finish(state)
         return state
 
@@ -285,12 +291,13 @@ class Orchestrator:
 
     def _judge_quality(self, state: AlarmState) -> None:
         """
-        두 번째 에이전트: 배치 진행 중 알람이면 품질 영향을 판정한다. 지시서 경로와 상관없이 한다
-        (매뉴얼이 없어 사람에게 넘긴 알람도 배치 품질에는 영향이 있을 수 있다).
+        두 번째 에이전트, 급한 판단 먼저: 배치 진행 중 알람이면 품질 규칙 판정을 내리고 바로 저장한다.
+        지시서 경로와 상관없이 한다 (매뉴얼이 없어 사람에게 넘긴 알람도 배치 품질에는 영향이 있을 수 있다).
+        여기서 저장하지 못하면 지시서를 저장한 뒤 지시서 번호로 다시 저장한다.
         """
         if not in_batch(state.alarm):
             return
-        q = self._step(state, "quality", lambda: self.quality.assess(state.alarm, state.work_order), default=None)
+        q = self._step(state, "quality", lambda: self.quality.judge_first(state.alarm), default=None)
         if q is None:
             state.quality_status = "FAILED"
             state.decide("품질 판정 실패: 품질팀이 직접 확인해야 함")
@@ -298,20 +305,45 @@ class Orchestrator:
         state.quality = q
         state.decide(f"품질 판정 {q['level']}: {q['basis']}"
                      + (" — 품질팀 승인 필요" if q["level"] == QUALITY_HOLD else ""))
-
-    def _record_quality(self, state: AlarmState, work_order_id: int) -> None:
-        saved = self._step(state, "quality_save",
-                           lambda: self.backend.save_quality_assessment(work_order_id, state.quality), default=None)
-        if saved is None:
-            state.quality_status = "FAILED"
-            state.decide("품질 판정 저장 실패: 품질팀이 직접 확인해야 함")
+        if self.dry_run:
             return
+        saved = self._step(state, "quality_save",
+                           lambda: self.backend.save_quality_for_alarm(state.alarm["id"], q), default=None)
+        if saved is None:
+            state.decide("품질 판정 즉시 저장 실패: 지시서 저장 뒤 다시 저장")
+            return
+        state.quality_id = saved["id"]
         state.quality_status = saved["status"]
-        state.decide(f"품질 판정 #{saved['id']} 저장 ({saved['status']})")
-        self.out(f"        -> quality assessment #{saved['id']} {state.quality['level']} ({saved['status']})")
+        state.decide(f"품질 판정 #{saved['id']} 즉시 저장 ({saved['status']}, 지시서보다 먼저)")
+        self.out(f"[AGENT] alarm #{state.alarm['id']} quality {q['level']} saved first as #{saved['id']}"
+                 f" ({saved['status']})")
+
+    def _finish_quality(self, state: AlarmState, work_order_id: int) -> None:
+        """지시서가 나온 뒤: LLM 설명(지시서 요약 포함)을 쓰고 판정에 지시서를 연결한다."""
+        explanation = self._step(state, "quality_explain",
+                                 lambda: self.quality.explain(state.alarm, state.work_order), default=None)
+        if state.quality_id is None:
+            # 즉시 저장이 실패했던 경우: 지시서 번호로 판정을 새로 남긴다
+            payload = {**state.quality, **(explanation or {})}
+            saved = self._step(state, "quality_save",
+                               lambda: self.backend.save_quality_assessment(work_order_id, payload), default=None)
+            if saved is None:
+                state.quality_status = "FAILED"
+                state.decide("품질 판정 저장 실패: 품질팀이 직접 확인해야 함")
+                return
+            state.quality_id, state.quality_status = saved["id"], saved["status"]
+            state.decide(f"품질 판정 #{saved['id']} 저장 ({saved['status']})")
+            return
+        linked = self._step(state, "quality_link", lambda: self.backend.explain_quality(
+            state.quality_id, {"workOrderId": work_order_id, **(explanation or {})}), default=None)
+        if linked is None:
+            state.decide("품질 판정에 지시서 연결 실패: 판정은 알람 기준으로 남아 있음")
+            return
+        state.decide(f"품질 판정 #{state.quality_id}에 WO 연결"
+                     + (f", {explanation['generator']} 설명 추가" if explanation else ", 템플릿 설명 유지"))
 
     def _approve_and_finish(self, state: AlarmState) -> None:
-        """단일 출구: 지시서 저장 → (제안이 있으면) 승인 요청 → (배치 중이면) 품질 판정 저장 → 결정 로그."""
+        """단일 출구: 지시서 저장 → (제안이 있으면) 승인 요청 → (배치 중이면) 품질 설명 · 지시서 연결 → 결정 로그."""
         wo = state.work_order
         wo["severity"] = state.alarm["severity"]  # LLM 이 쓰는 동안 알람 심각도가 바뀔 수 있다
         wo["body"] = wo["body"] + "\n" + "\n".join(trace_section(state))
@@ -333,7 +365,7 @@ class Orchestrator:
         if state.proposal:
             self._request_approval(state, saved["id"])
         if state.quality:
-            self._record_quality(state, saved["id"])
+            self._finish_quality(state, saved["id"])
         self._write_decisions(state)
 
     def _request_approval(self, state: AlarmState, work_order_id: int) -> None:

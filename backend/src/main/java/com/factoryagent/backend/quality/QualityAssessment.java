@@ -30,7 +30,8 @@ public class QualityAssessment {
     @Column(name = "alarm_id", nullable = false)
     private Long alarmId;
 
-    @Column(name = "work_order_id", nullable = false)
+    /** 판정은 알람 직후에 먼저 저장되고, 지시서는 나중에 연결된다 (그 전에는 null). */
+    @Column(name = "work_order_id")
     private Long workOrderId;
 
     @Column(name = "batch_id", nullable = false, length = 32)
@@ -94,6 +95,20 @@ public class QualityAssessment {
         q.status = level == Level.HOLD ? Status.PENDING : Status.RECORDED;
         q.createdAt = at;
         return q;
+    }
+
+    /**
+     * 지시서가 나온 뒤 지시서를 연결하고 이유 설명을 바꾼다 (템플릿 → LLM 설명).
+     * 판정(level)과 품질팀 결정은 바꾸지 않는다: 이미 승인했어도 설명만 덧붙는다.
+     */
+    public void explain(Long workOrderId, String reason, String generator) {
+        if (workOrderId != null) {
+            this.workOrderId = workOrderId;
+        }
+        if (reason != null && !reason.isBlank()) {
+            this.reason = clip(reason, 2000);
+            this.generator = generator;
+        }
     }
 
     /** 품질팀이 홀드 권고를 승인한다: 배치 홀드 · 출하 보류가 확정된다. */

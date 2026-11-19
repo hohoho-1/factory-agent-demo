@@ -1344,3 +1344,26 @@ p {
 .quality-chip--rejected {
   background: color-mix(in srgb, var(--muted) 18%, transparent);
 }
+
+/* 알람 패널 안의 품질 판정 (지시서보다 먼저 뜬다) */
+.alarm__quality {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.alarm__quality-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 13px;
+}
+
+.alarm__quality .button {
+  font-size: 12px;
+  padding: 4px 10px;
+}

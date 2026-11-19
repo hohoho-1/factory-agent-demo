@@ -57,6 +57,10 @@ public class QualityController {
                 : repository.findByBatchIdOrderByCreatedAt(batchId);
     }
 
+    public record ExplanationRequest(Long workOrderId, String reason, String generator) {
+    }
+
+    /** 지시서가 나온 뒤 품질 판정을 남기는 경로 (판정을 먼저 저장하지 못했을 때의 대체 경로). */
     @PostMapping("/api/work-orders/{workOrderId}/quality-assessments")
     @Transactional
     public ResponseEntity<?> create(@PathVariable Long workOrderId, @RequestBody AssessmentRequest req) {
@@ -64,8 +68,43 @@ public class QualityController {
         if (wo.isEmpty()) {
             return error(HttpStatus.NOT_FOUND, "지시서 WO-" + workOrderId + " 가 없습니다");
         }
-        Optional<Alarm> alarm = alarms.findById(wo.get().getAlarmId());
-        if (alarm.isEmpty() || alarm.get().getBatchId() == null) {
+        return create(wo.get().getAlarmId(), workOrderId, req);
+    }
+
+    /** 급한 판단 먼저: 알람 직후 지시서 없이 규칙 판정부터 남긴다. 홀드면 바로 품질팀 승인 대기가 된다. */
+    @PostMapping("/api/alarms/{alarmId}/quality-assessments")
+    @Transactional
+    public ResponseEntity<?> createForAlarm(@PathVariable Long alarmId, @RequestBody AssessmentRequest req) {
+        return create(alarmId, null, req);
+    }
+
+    /** 지시서가 나오면 판정에 지시서를 연결하고 이유 설명을 바꾼다. 판정과 품질팀 결정은 그대로다. */
+    @PostMapping("/api/quality-assessments/{id}/explanation")
+    @Transactional
+    public ResponseEntity<?> explain(@PathVariable Long id, @RequestBody ExplanationRequest req) {
+        Optional<QualityAssessment> found = repository.findById(id);
+        if (found.isEmpty()) {
+            return error(HttpStatus.NOT_FOUND, "품질 판정 #" + id + " 가 없습니다");
+        }
+        QualityAssessment q = found.get();
+        if (req.workOrderId() != null) {
+            Optional<WorkOrder> wo = workOrders.findById(req.workOrderId());
+            if (wo.isEmpty() || !wo.get().getAlarmId().equals(q.getAlarmId())) {
+                return error(HttpStatus.UNPROCESSABLE_ENTITY, "같은 알람의 지시서가 아닙니다");
+            }
+        }
+        q.explain(req.workOrderId(), req.reason(), req.generator());
+        QualityAssessment saved = repository.save(q);
+        events.publishEvent(new QualityAssessmentEvent(saved));
+        return ResponseEntity.ok(saved);
+    }
+
+    private ResponseEntity<?> create(Long alarmId, Long workOrderId, AssessmentRequest req) {
+        Optional<Alarm> alarm = alarms.findById(alarmId);
+        if (alarm.isEmpty()) {
+            return error(HttpStatus.NOT_FOUND, "알람 #" + alarmId + " 가 없습니다");
+        }
+        if (alarm.get().getBatchId() == null) {
             return error(HttpStatus.UNPROCESSABLE_ENTITY, "배치 진행 중 알람이 아니라 품질 판정을 남기지 않습니다");
         }
         QualityAssessment.Level level;
