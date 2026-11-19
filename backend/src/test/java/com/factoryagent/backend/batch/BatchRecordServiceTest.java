@@ -119,6 +119,11 @@ class BatchRecordServiceTest {
         q.approve("qa-lee", T0.plusSeconds(300));
         assertThat(BatchRecordService.verdict(run, List.of(alarm), List.of(wo), List.of(q)).text())
                 .contains("품질팀이 배치 홀드를 승인");
+        // 검사 판정: 합격이면 보류가 풀리고, 불합격이면 폐기
+        q.dispose(QualityAssessment.Disposition.PASS, "qa-lee", "점도 · 분리 검사 합격", T0.plusSeconds(600));
+        BatchRecordService.Verdict passed = BatchRecordService.verdict(run, List.of(alarm), List.of(wo), List.of(q));
+        assertThat(passed.level()).isEqualTo("REVIEW");
+        assertThat(passed.text()).contains("검사 합격");
 
         QualityAssessment inspect = QualityAssessment.create(5L, 9L, "B-1", "EMULSIFYING", "MIXER-01", "temperature",
                 QualityAssessment.Level.INSPECT, "유화 온도 경고 이탈", "이유", "template", T0.plusSeconds(95));

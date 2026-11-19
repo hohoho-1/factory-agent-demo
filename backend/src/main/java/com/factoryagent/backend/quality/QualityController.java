@@ -124,6 +124,26 @@ public class QualityController {
         return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
+    public record DispositionRequest(String result, String worker, String note) {
+    }
+
+    /**
+     * 홀드 배치의 검사 판정: PASS(합격 → 보류 해제) / FAIL(불합격 → 폐기). 판정은 ERP 에 알려져
+     * 보류 재고가 가용 재고로 바뀌거나 폐기되고, 불합격이면 ERP 가 재생산 오더를 계획한다.
+     */
+    @PostMapping("/api/quality-assessments/{id}/disposition")
+    @Transactional
+    public ResponseEntity<?> dispose(@PathVariable Long id, @RequestBody DispositionRequest req) {
+        QualityAssessment.Disposition result;
+        try {
+            result = QualityAssessment.Disposition.valueOf(req.result());
+        } catch (IllegalArgumentException | NullPointerException e) {
+            return error(HttpStatus.BAD_REQUEST, "판정은 PASS 또는 FAIL 이어야 합니다");
+        }
+        String worker = req.worker() == null || req.worker().isBlank() ? "품질팀" : req.worker().trim();
+        return decide(id, q -> q.dispose(result, worker, req.note(), Instant.now(clock)));
+    }
+
     @PostMapping("/api/quality-assessments/{id}/approve")
     @Transactional
     public ResponseEntity<?> approve(@PathVariable Long id, @RequestBody(required = false) DecisionRequest req) {

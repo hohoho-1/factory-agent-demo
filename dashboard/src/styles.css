@@ -1618,3 +1618,13 @@ p {
 .mes__next {
   margin-left: 0;
 }
+
+.quality__verdict--pass {
+  color: var(--status-good);
+  font-weight: 600;
+}
+
+.quality__verdict--fail {
+  color: var(--status-critical);
+  font-weight: 600;
+}

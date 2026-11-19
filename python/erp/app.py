@@ -94,25 +94,82 @@ def inventory() -> list[dict]:
         out = []
         for r in rows:
             m = master[r["item_code"]]
-            on_hand, allocated = num(r["on_hand"]), num(r["allocated"])
+            on_hand, allocated, quarantine = num(r["on_hand"]), num(r["allocated"]), num(r["quarantine"])
             out.append({**m, "onHand": on_hand, "allocated": allocated, "available": on_hand - allocated,
-                        "value": round(on_hand * m["unitCost"]),
+                        "quarantine": quarantine, "value": round(on_hand * m["unitCost"]),
                         "belowSafety": m["type"] != "FG" and on_hand - allocated < m["safetyStock"]})
         return sorted(out, key=lambda x: (x["type"] != "FG", x["type"], x["code"]))
+
+
+def order_progress(c, so: dict) -> dict:
+    """
+    판매 주문 1건의 생산 · 품질 상태: 생산 오더(재생산 포함)를 모아 양품 · 보류 · 폐기 수량, 종료 예정, 납기 위험.
+    양품 = 생산 - 폐기 - 품질 보류. 출하하려면 양품이 주문 수량 이상이고 보류가 없어야 한다.
+    """
+    prods = c.execute("SELECT * FROM erp.production_order WHERE sales_order_id = %s ORDER BY id", (so["id"],)).fetchall()
+    held = c.execute("""
+        SELECT coalesce(sum(h.qty), 0) AS qty, count(*) AS n FROM erp.quality_hold h
+          JOIN erp.production_order p ON p.id = h.production_order_id
+         WHERE p.sales_order_id = %s AND h.status = 'HELD'""", (so["id"],)).fetchone()
+    produced = sum(p["produced_qty"] for p in prods)
+    scrapped = sum(p["scrapped_qty"] for p in prods)
+    held_qty = int(held["qty"])
+    good = produced - scrapped - held_qty
+    reasons = [p["risk_reason"] for p in prods if p["at_risk"] and p["risk_reason"]
+               and p["status"] in ("PLANNED", "RELEASED", "IN_PROGRESS")]
+    if held["n"]:
+        reasons.insert(0, f"품질 보류 {held_qty:,}파우치 (검사 판정 대기)")
+    open_prods = [p for p in prods if p["status"] in ("PLANNED", "RELEASED", "IN_PROGRESS")]
+    planned_end = max((p["planned_end"] for p in open_prods), default=None) or max(
+        (p["planned_end"] for p in prods), default=None)
+    late = bool(planned_end and so["status"] != "SHIPPED" and planned_end > so["due_date"] and open_prods)
+    return {"productionNos": [p["order_no"] for p in prods], "plannedEnd": planned_end,
+            "producedQty": produced, "scrappedQty": scrapped, "heldQty": held_qty, "goodQty": max(0, good),
+            "atRisk": so["status"] != "SHIPPED" and (bool(held["n"]) or late or bool(reasons)),
+            "riskReason": " · ".join(reasons) or (f"생산 종료 예정 {planned_end}가 납기보다 늦음" if late else None),
+            "openProduction": len(open_prods)}
+
+
+def sales_order_status(c, so: dict) -> str:
+    """생산 오더 진행으로 주문 상태를 다시 정한다 (출하된 주문은 그대로)."""
+    if so["status"] in ("SHIPPED", "OPEN"):
+        return so["status"]
+    pr = order_progress(c, so)
+    if pr["openProduction"] == 0 and pr["heldQty"] == 0 and pr["goodQty"] >= so["qty"]:
+        return "COMPLETED"
+    if pr["producedQty"] > 0 or any(
+            p["status"] != "PLANNED" for p in c.execute(
+                "SELECT status FROM erp.production_order WHERE sales_order_id = %s", (so["id"],)).fetchall()):
+        return "IN_PRODUCTION"
+    return "PLANNED"
+
+
+def refresh_sales_order(c, sales_order_id: int | None) -> None:
+    if not sales_order_id:
+        return
+    so = c.execute("SELECT * FROM erp.sales_order WHERE id = %s", (sales_order_id,)).fetchone()
+    status = sales_order_status(c, so)
+    if status != so["status"]:
+        c.execute("UPDATE erp.sales_order SET status = %s WHERE id = %s", (status, sales_order_id))
 
 
 @app.get("/erp/sales-orders")
 def sales_orders() -> list[dict]:
     with conn() as c:
         rows = c.execute("""
-            SELECT s.*, i.name AS item_name, p.order_no AS production_no, p.planned_end, p.at_risk, p.risk_reason
-              FROM erp.sales_order s JOIN erp.item i ON i.code = s.item_code
-              LEFT JOIN erp.production_order p ON p.sales_order_id = s.id
+            SELECT s.*, i.name AS item_name FROM erp.sales_order s JOIN erp.item i ON i.code = s.item_code
              ORDER BY s.due_date, s.id""").fetchall()
-        return [{"id": r["id"], "orderNo": r["order_no"], "customer": r["customer"], "itemCode": r["item_code"],
-                 "itemName": r["item_name"], "qty": r["qty"], "dueDate": r["due_date"], "status": r["status"],
-                 "productionNo": r["production_no"], "plannedEnd": r["planned_end"], "atRisk": bool(r["at_risk"]),
-                 "riskReason": r["risk_reason"]} for r in rows]
+        out = []
+        for r in rows:
+            pr = order_progress(c, r)
+            out.append({"id": r["id"], "orderNo": r["order_no"], "customer": r["customer"], "itemCode": r["item_code"],
+                        "itemName": r["item_name"], "qty": r["qty"], "dueDate": r["due_date"], "status": r["status"],
+                        "productionNo": ", ".join(pr["productionNos"]) or None, "plannedEnd": pr["plannedEnd"],
+                        "atRisk": pr["atRisk"], "riskReason": pr["riskReason"], "producedQty": pr["producedQty"],
+                        "goodQty": pr["goodQty"], "heldQty": pr["heldQty"], "scrappedQty": pr["scrappedQty"],
+                        "shippedAt": r["shipped_at"],
+                        "canShip": r["status"] == "COMPLETED" and pr["heldQty"] == 0 and pr["goodQty"] >= r["qty"]})
+        return out
 
 
 @app.get("/erp/production-orders")
@@ -134,6 +191,7 @@ def production_orders() -> list[dict]:
                  "plannedEnd": p["planned_end"], "dueDate": p["due_date"], "atRisk": p["at_risk"],
                  "riskReason": p["risk_reason"], "plannedCost": p["planned_cost"], "status": p["status"],
                  "producedQty": p["produced_qty"], "batchesDone": p["batches_done"],
+                 "scrappedQty": p["scrapped_qty"], "reworkOf": p["rework_of"],
                  "materials": by_order.get(p["id"], [])} for p in orders]
 
 
@@ -167,6 +225,8 @@ def summary() -> dict:
         "belowSafety": [i["code"] for i in inv if i["belowSafety"]],
         "openPurchaseAmount": sum(p["amount"] for p in po if p["status"] == "OPEN"),
         "openPurchases": sum(1 for p in po if p["status"] == "OPEN"),
+        "quarantineQty": sum(i["quarantine"] for i in inv if i["type"] == "FG"),
+        "heldOrders": sum(1 for s in so if s["heldQty"] > 0),
     }
 
 
@@ -202,36 +262,42 @@ def plan_sales_order(order_id: int) -> dict:
             raise HTTPException(404, f"주문 #{order_id} 가 없습니다")
         if so["status"] != "OPEN":
             raise HTTPException(409, f"이미 계획된 주문입니다 ({so['status']})")
-        master = items_master(c)
-        plan = planning.plan_order(so["item_code"], so["qty"], so["due_date"], today, available_stock(c), master,
-                                   line_free_from(c, today))
-        prod = c.execute("""
-            INSERT INTO erp.production_order (sales_order_id, item_code, qty, batches, material_ready, planned_start,
-                   planned_end, at_risk, risk_reason, planned_cost, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED') RETURNING id""",
-                         (order_id, plan.item_code, plan.qty, plan.batches, plan.material_ready, plan.start, plan.end,
-                          plan.at_risk, plan.risk_reason, plan.planned_cost)).fetchone()
-        prod_no = f"PRD-{prod['id']:04d}"
-        c.execute("UPDATE erp.production_order SET order_no = %s WHERE id = %s", (prod_no, prod["id"]))
-        for line in plan.lines:
-            c.execute("INSERT INTO erp.production_material VALUES (%s, %s, %s, %s, %s)",
-                      (prod["id"], line.item_code, line.required, line.allocated, line.shortage))
-            if line.allocated:
-                c.execute("UPDATE erp.inventory SET allocated = allocated + %s WHERE item_code = %s",
-                          (line.allocated, line.item_code))
-                c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'ALLOCATE', %s, %s)",
-                          (line.item_code, line.allocated, prod_no))
-        for line in plan.purchases:
-            po = c.execute("""
-                INSERT INTO erp.purchase_order (item_code, qty, unit_cost, expected_date, status, production_order_id)
-                VALUES (%s, %s, %s, %s, 'OPEN', %s) RETURNING id""",
-                           (line.item_code, line.purchase_qty, master[line.item_code]["unitCost"], line.ready_date,
-                            prod["id"])).fetchone()
-            c.execute("UPDATE erp.purchase_order SET order_no = %s WHERE id = %s", (f"PUR-{po['id']:04d}", po["id"]))
+        prod_id, prod_no = create_production_order(c, order_id, so["item_code"], so["qty"], so["due_date"], today)
         c.execute("UPDATE erp.sales_order SET status = 'PLANNED' WHERE id = %s", (order_id,))
         c.commit()
-    return {"productionOrder": next(p for p in production_orders() if p["id"] == prod["id"]),
+    return {"productionOrder": next(p for p in production_orders() if p["id"] == prod_id),
             "purchaseOrders": [p for p in purchase_orders() if p["productionNo"] == prod_no]}
+
+
+def create_production_order(c, sales_order_id: int, item_code: str, qty: int, due: date, today: date,
+                            rework_of: int | None = None) -> tuple[int, str]:
+    """생산 오더 1건을 계획해 저장한다: 자재 할당 · 부족분 발주 · 일정 · 납기 리스크. 재생산 오더도 이 길을 쓴다."""
+    master = items_master(c)
+    plan = planning.plan_order(item_code, qty, due, today, available_stock(c), master, line_free_from(c, today))
+    prod = c.execute("""
+        INSERT INTO erp.production_order (sales_order_id, item_code, qty, batches, material_ready, planned_start,
+               planned_end, at_risk, risk_reason, planned_cost, status, rework_of)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'PLANNED', %s) RETURNING id""",
+                     (sales_order_id, plan.item_code, plan.qty, plan.batches, plan.material_ready, plan.start, plan.end,
+                      plan.at_risk, plan.risk_reason, plan.planned_cost, rework_of)).fetchone()
+    prod_no = f"PRD-{prod['id']:04d}"
+    c.execute("UPDATE erp.production_order SET order_no = %s WHERE id = %s", (prod_no, prod["id"]))
+    for line in plan.lines:
+        c.execute("INSERT INTO erp.production_material VALUES (%s, %s, %s, %s, %s)",
+                  (prod["id"], line.item_code, line.required, line.allocated, line.shortage))
+        if line.allocated:
+            c.execute("UPDATE erp.inventory SET allocated = allocated + %s WHERE item_code = %s",
+                      (line.allocated, line.item_code))
+            c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'ALLOCATE', %s, %s)",
+                      (line.item_code, line.allocated, prod_no))
+    for line in plan.purchases:
+        po = c.execute("""
+            INSERT INTO erp.purchase_order (item_code, qty, unit_cost, expected_date, status, production_order_id)
+            VALUES (%s, %s, %s, %s, 'OPEN', %s) RETURNING id""",
+                       (line.item_code, line.purchase_qty, master[line.item_code]["unitCost"], line.ready_date,
+                        prod["id"])).fetchone()
+        c.execute("UPDATE erp.purchase_order SET order_no = %s WHERE id = %s", (f"PUR-{po['id']:04d}", po["id"]))
+    return prod["id"], prod_no
 
 
 @app.post("/erp/purchase-orders/{order_id}/receive")
@@ -377,12 +443,139 @@ def receive_actual(order_no: str, req: ActualRequest) -> dict:
         status = "COMPLETED" if produced >= p["qty"] else "IN_PROGRESS"
         c.execute("UPDATE erp.production_order SET produced_qty = %s, batches_done = batches_done + 1, status = %s"
                   " WHERE id = %s", (produced, status, p["id"]))
-        if p["sales_order_id"]:
-            c.execute("UPDATE erp.sales_order SET status = %s WHERE id = %s",
-                      ("COMPLETED" if status == "COMPLETED" else "IN_PRODUCTION", p["sales_order_id"]))
+        # 품질팀이 배치가 끝나기 전에 홀드를 확정했으면 그 기록을 적용한다 (보류 · 해제 · 폐기)
+        hold = c.execute("SELECT * FROM erp.quality_hold WHERE batch_id = %s", (req.batchId,)).fetchone()
+        if hold:
+            c.execute("UPDATE erp.quality_hold SET qty = %s, production_order_id = %s WHERE batch_id = %s",
+                      (req.qty, p["id"], req.batchId))
+            if hold["status"] in ("HELD", "SCRAPPED"):
+                _quarantine(c, p["item_code"], req.qty, req.batchId)
+            if hold["status"] == "SCRAPPED":
+                _scrap(c, p, req.qty, req.batchId, date.today())
+        refresh_sales_order(c, p["sales_order_id"])
         c.commit()
     print(f"[ERP] actual {req.batchId}: {order_no} +{req.qty} ({produced}/{p['qty']}, {status})", flush=True)
     return {"duplicate": False, "batchId": req.batchId, "producedQty": produced, "status": status}
+
+
+# ------------------------------------------------------------------ 품질 연계 · 출하
+
+def _quarantine(c, item_code: str, qty: int, ref: str) -> None:
+    """완제품을 가용 재고에서 품질 보류 재고로 옮긴다."""
+    c.execute("UPDATE erp.inventory SET on_hand = on_hand - %s, quarantine = quarantine + %s WHERE item_code = %s",
+              (qty, qty, item_code))
+    c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'QUARANTINE', %s, %s)",
+              (item_code, qty, ref))
+
+
+def _scrap(c, prod: dict, qty: int, batch_id: str, today: date) -> str | None:
+    """보류 재고를 폐기하고, 그 수량만큼 재생산 오더를 계획한다. 재생산 오더 번호를 돌려준다."""
+    c.execute("UPDATE erp.inventory SET quarantine = quarantine - %s WHERE item_code = %s", (qty, prod["item_code"]))
+    c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'SCRAP', %s, %s)",
+              (prod["item_code"], qty, batch_id))
+    c.execute("UPDATE erp.production_order SET scrapped_qty = scrapped_qty + %s WHERE id = %s", (qty, prod["id"]))
+    if not prod["sales_order_id"]:
+        return None
+    so = c.execute("SELECT * FROM erp.sales_order WHERE id = %s", (prod["sales_order_id"],)).fetchone()
+    _, rework_no = create_production_order(c, so["id"], prod["item_code"], qty, so["due_date"], today,
+                                           rework_of=prod["id"])
+    print(f"[ERP] batch {batch_id} scrapped: {qty} pouches, rework order {rework_no} planned", flush=True)
+    return rework_no
+
+
+class HoldRequest(BaseModel):
+    batchId: str = Field(min_length=1, max_length=32)
+    assessmentId: int | None = None
+    reason: str | None = None
+    approvedBy: str | None = None
+
+
+@app.post("/erp/quality-holds")
+def quality_hold(req: HoldRequest) -> dict:
+    """
+    MES: 품질팀이 배치 홀드를 확정했다. 그 배치의 완제품을 품질 보류 재고로 옮긴다.
+    배치 실적이 아직 안 왔으면 기억해 두었다가 실적이 올 때 보류로 받는다. 같은 배치를 다시 보내면 무시한다.
+    """
+    with conn() as c:
+        if c.execute("SELECT 1 FROM erp.quality_hold WHERE batch_id = %s", (req.batchId,)).fetchone():
+            return {"duplicate": True, "batchId": req.batchId}
+        actual = c.execute("SELECT a.*, p.item_code, p.sales_order_id FROM erp.production_actual a"
+                           " JOIN erp.production_order p ON p.id = a.production_order_id WHERE a.batch_id = %s",
+                           (req.batchId,)).fetchone()
+        c.execute("INSERT INTO erp.quality_hold (batch_id, assessment_id, reason, approved_by, status, qty,"
+                  " production_order_id) VALUES (%s, %s, %s, %s, 'HELD', %s, %s)",
+                  (req.batchId, req.assessmentId, (req.reason or "")[:500], req.approvedBy,
+                   actual["qty"] if actual else None, actual["production_order_id"] if actual else None))
+        if actual:
+            _quarantine(c, actual["item_code"], actual["qty"], req.batchId)
+            refresh_sales_order(c, actual["sales_order_id"])
+        c.commit()
+    print(f"[ERP] quality hold {req.batchId}" + (f": {actual['qty']} pouches quarantined" if actual else
+                                                 " (batch not reported yet)"), flush=True)
+    return {"duplicate": False, "batchId": req.batchId, "quarantined": actual["qty"] if actual else 0}
+
+
+class DispositionRequest(BaseModel):
+    result: str = Field(pattern="^(PASS|FAIL)$")
+    by: str | None = None
+    note: str | None = None
+
+
+@app.post("/erp/quality-holds/{batch_id}/disposition")
+def quality_disposition(batch_id: str, req: DispositionRequest) -> dict:
+    """
+    MES: 홀드 배치의 검사 판정. 합격이면 보류 재고를 가용 재고로 돌리고, 불합격이면 폐기하고
+    모자란 수량만큼 재생산 오더를 계획한다 (자재 할당 · 발주 · 일정 · 납기 위험을 다시 계산).
+    """
+    today = date.today()
+    rework_no = None
+    with conn() as c:
+        hold = c.execute("SELECT * FROM erp.quality_hold WHERE batch_id = %s FOR UPDATE", (batch_id,)).fetchone()
+        if hold is None:
+            raise HTTPException(404, f"보류 중인 배치가 아닙니다: {batch_id}")
+        if hold["status"] != "HELD":
+            return {"duplicate": True, "batchId": batch_id, "status": hold["status"]}
+        status = "RELEASED" if req.result == "PASS" else "SCRAPPED"
+        c.execute("UPDATE erp.quality_hold SET status = %s, decided_at = now(), note = %s WHERE batch_id = %s",
+                  (status, (req.note or "")[:500], batch_id))
+        if hold["qty"]:   # 실적이 이미 와서 보류 재고에 있다 (아니면 실적이 올 때 적용된다)
+            prod = c.execute("SELECT * FROM erp.production_order WHERE id = %s", (hold["production_order_id"],)).fetchone()
+            if status == "RELEASED":
+                c.execute("UPDATE erp.inventory SET quarantine = quarantine - %s, on_hand = on_hand + %s"
+                          " WHERE item_code = %s", (hold["qty"], hold["qty"], prod["item_code"]))
+                c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'RELEASE', %s, %s)",
+                          (prod["item_code"], hold["qty"], batch_id))
+            else:
+                rework_no = _scrap(c, prod, hold["qty"], batch_id, today)
+            refresh_sales_order(c, prod["sales_order_id"])
+        c.commit()
+    print(f"[ERP] quality disposition {batch_id}: {req.result}", flush=True)
+    return {"duplicate": False, "batchId": batch_id, "status": status, "reworkOrder": rework_no}
+
+
+@app.post("/erp/sales-orders/{order_id}/ship")
+def ship(order_id: int) -> dict:
+    """출하: 생산이 끝나고, 품질 보류가 없고, 양품 · 가용 완제품이 주문 수량 이상이어야 한다."""
+    with conn() as c:
+        so = c.execute("SELECT * FROM erp.sales_order WHERE id = %s FOR UPDATE", (order_id,)).fetchone()
+        if so is None:
+            raise HTTPException(404, f"주문 #{order_id} 가 없습니다")
+        if so["status"] == "SHIPPED":
+            raise HTTPException(409, "이미 출하한 주문입니다")
+        pr = order_progress(c, so)
+        if pr["heldQty"]:
+            raise HTTPException(409, f"출하 보류: 품질 보류 {pr['heldQty']:,}파우치가 검사 판정을 기다립니다")
+        if so["status"] != "COMPLETED" or pr["goodQty"] < so["qty"]:
+            raise HTTPException(409, f"출하할 양품이 모자랍니다 (양품 {pr['goodQty']:,} / 주문 {so['qty']:,}파우치)")
+        stock = c.execute("SELECT on_hand FROM erp.inventory WHERE item_code = %s", (so["item_code"],)).fetchone()
+        if num(stock["on_hand"]) < so["qty"]:
+            raise HTTPException(409, f"가용 완제품이 모자랍니다 ({num(stock['on_hand']):,.0f}파우치)")
+        c.execute("UPDATE erp.inventory SET on_hand = on_hand - %s WHERE item_code = %s", (so["qty"], so["item_code"]))
+        c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'SHIP', %s, %s)",
+                  (so["item_code"], so["qty"], so["order_no"]))
+        c.execute("UPDATE erp.sales_order SET status = 'SHIPPED', shipped_at = now() WHERE id = %s", (order_id,))
+        c.commit()
+    return next(s for s in sales_orders() if s["id"] == order_id)
 
 
 @app.post("/erp/reset")

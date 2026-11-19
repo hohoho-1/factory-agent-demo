@@ -239,6 +239,14 @@ export interface QualityAssessment {
   decidedBy: string | null
   decidedAt: string | null
   decisionNote: string | null
+  /** 홀드 승인 뒤 검사 판정: PASS(합격 → 보류 해제) / FAIL(불합격 → 폐기, ERP 재생산) */
+  disposition: 'PASS' | 'FAIL' | null
+  dispositionBy: string | null
+  dispositionAt: string | null
+  dispositionNote: string | null
+  /** ERP 에 홀드 · 판정을 알린 시각 */
+  holdReportedAt: string | null
+  dispositionReportedAt: string | null
 }
 
 export interface ActionStats {

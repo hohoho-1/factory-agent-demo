@@ -105,6 +105,26 @@ class QualityControllerTest {
     }
 
     @Test
+    void dispositionOnlyAfterApprovedHoldAndOnlyOnce() {
+        alarm(true);
+        QualityAssessment q = (QualityAssessment) controller.createForAlarm(5L, new QualityController.AssessmentRequest(
+                "HOLD", "유화 단계 온도 위험 이탈", "r", "template")).getBody();
+        when(repository.findById(6L)).thenReturn(Optional.of(q));
+        // 승인 전에는 판정할 수 없다
+        assertThat(controller.dispose(6L, new QualityController.DispositionRequest("FAIL", "qa", null)).getStatusCode())
+                .isEqualTo(HttpStatus.CONFLICT);
+        controller.approve(6L, new QualityController.DecisionRequest("qa-lee", null));
+        assertThat(q.isHeld()).isTrue();
+        assertThat(controller.dispose(6L, new QualityController.DispositionRequest("MAYBE", "qa", null)).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+        controller.dispose(6L, new QualityController.DispositionRequest("FAIL", "qa-lee", "상 분리 확인"));
+        assertThat(q.getDisposition()).isEqualTo(QualityAssessment.Disposition.FAIL);
+        assertThat(q.isHeld()).isFalse();
+        assertThat(controller.dispose(6L, new QualityController.DispositionRequest("PASS", "qa", null)).getStatusCode())
+                .isEqualTo(HttpStatus.CONFLICT);
+    }
+
+    @Test
     void explanationRejectsAWorkOrderOfAnotherAlarm() {
         alarm(true);
         QualityAssessment q = QualityAssessment.create(77L, null, "B-1", "EMULSIFYING", "MIXER-01", "temperature",

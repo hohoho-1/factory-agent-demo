@@ -15,6 +15,8 @@ interface Summary {
   belowSafety: string[]
   openPurchaseAmount: number
   openPurchases: number
+  quarantineQty: number
+  heldOrders: number
 }
 
 interface SalesOrder {
@@ -30,6 +32,12 @@ interface SalesOrder {
   plannedEnd: string | null
   atRisk: boolean
   riskReason: string | null
+  producedQty: number
+  goodQty: number
+  heldQty: number
+  scrappedQty: number
+  shippedAt: string | null
+  canShip: boolean
 }
 
 interface Material {
@@ -58,6 +66,8 @@ interface ProductionOrder {
   status: 'PLANNED' | 'RELEASED' | 'IN_PROGRESS' | 'COMPLETED' | 'ON_HOLD'
   producedQty: number
   batchesDone: number
+  scrappedQty: number
+  reworkOf: number | null
   materials: Material[]
 }
 
@@ -90,6 +100,7 @@ interface Stock {
   onHand: number
   allocated: number
   available: number
+  quarantine: number
   safetyStock: number
   value: number
   belowSafety: boolean
@@ -214,6 +225,12 @@ export function ErpView() {
       return `${po.orderNo} 입고: ${po.itemName} ${qty(po.qty)}${po.uom}` + (r.rescheduled.length ? ' · 생산 일정 다시 계산' : '')
     })
 
+  const ship = (so: SalesOrder) =>
+    act('출하', async () => {
+      await postJson(`/erp/sales-orders/${so.id}/ship`, {})
+      return `${so.orderNo} 출하: ${so.itemName} ${qty(so.qty)}파우치`
+    })
+
   const release = (p: ProductionOrder) =>
     act('현장 지시', async () => {
       await postJson(`/erp/production-orders/${p.id}/release`, {})
@@ -251,6 +268,11 @@ export function ErpView() {
         <div className={`erp__kpi${summary?.atRiskOrders ? ' erp__kpi--risk' : ''}`}>
           <span className="kpi__label">납기 위험</span>
           <b>{summary?.atRiskOrders ?? '—'}</b>
+        </div>
+        <div className={`erp__kpi${summary?.heldOrders ? ' erp__kpi--risk' : ''}`}>
+          <span className="kpi__label">품질 보류</span>
+          <b>{summary ? `${qty(summary.quarantineQty)}파우치` : '—'}</b>
+          <span className="muted">{summary?.heldOrders ? `출하 보류 주문 ${summary.heldOrders}건` : ''}</span>
         </div>
         <div className="erp__kpi">
           <span className="kpi__label">재고 금액</span>
@@ -320,7 +342,7 @@ export function ErpView() {
                 <th className="num">수량(파우치)</th>
                 <th>납기</th>
                 <th>상태</th>
-                <th>생산 종료 예정</th>
+                <th>생산 · 품질</th>
                 <th />
               </tr>
             </thead>
@@ -333,8 +355,15 @@ export function ErpView() {
                   <td className="num">{qty(so.qty)}</td>
                   <td>{day(so.dueDate)}</td>
                   <td>{SO_STATUS[so.status]}</td>
-                  <td>
-                    {so.productionNo ? `${so.productionNo} · ${day(so.plannedEnd)}` : '—'}
+                  <td className="erp__wrap">
+                    {so.productionNo ? `${so.productionNo} · 종료 예정 ${day(so.plannedEnd)}` : '—'}
+                    {so.producedQty > 0 && (
+                      <div className="muted">
+                        양품 {qty(so.goodQty)}
+                        {so.heldQty > 0 && ` · 보류 ${qty(so.heldQty)}`}
+                        {so.scrappedQty > 0 && ` · 폐기 ${qty(so.scrappedQty)}`}
+                      </div>
+                    )}
                     {so.atRisk && <div className="erp__risk">납기 위험: {so.riskReason}</div>}
                   </td>
                   <td>
@@ -343,6 +372,18 @@ export function ErpView() {
                         생산 계획
                       </button>
                     )}
+                    {so.status === 'COMPLETED' && (
+                      <button
+                        className="button"
+                        disabled={busy || !so.canShip}
+                        title={so.canShip ? undefined : '품질 보류가 풀리거나 양품이 다 차야 출하할 수 있습니다'}
+                        onClick={() => void ship(so)}
+                      >
+                        출하
+                      </button>
+                    )}
+                    {so.heldQty > 0 && so.status !== 'SHIPPED' && <span className="erp__risk">출하 보류</span>}
+                    {so.status === 'SHIPPED' && <span className="muted">출하 완료</span>}
                   </td>
                 </tr>
               ))}
@@ -382,7 +423,10 @@ export function ErpView() {
                   const short = p.materials.filter((m) => m.shortage > 0)
                   return (
                     <tr key={p.id} className={p.atRisk ? 'erp__row--risk' : undefined}>
-                      <td>{p.orderNo}</td>
+                      <td>
+                        {p.orderNo}
+                        {p.reworkOf != null && <div className="erp__risk">재생산</div>}
+                      </td>
                       <td>{p.salesNo ?? '—'}</td>
                       <td>{p.itemName}</td>
                       <td className="num">{qty(p.qty)}</td>
@@ -414,6 +458,7 @@ export function ErpView() {
                         {p.status !== 'PLANNED' && (
                           <div className="muted">
                             배치 {p.batchesDone}/{p.batches} · {qty(p.producedQty)}파우치
+                            {p.scrappedQty > 0 && ` · 폐기 ${qty(p.scrappedQty)}`}
                           </div>
                         )}
                       </td>
@@ -490,13 +535,12 @@ export function ErpView() {
                   <th className="num">현재고</th>
                   <th className="num">할당</th>
                   <th className="num">가용</th>
+                  <th className="num">품질 보류</th>
                   <th className="num">안전재고</th>
                 </tr>
               </thead>
               <tbody>
-                {stock
-                  .filter((s) => s.type !== 'FG')
-                  .map((s) => (
+                {stock.map((s) => (
                     <tr key={s.code} className={s.belowSafety ? 'erp__row--risk' : undefined}>
                       <td>
                         {s.name} <span className="muted">{s.code}</span>
@@ -506,7 +550,8 @@ export function ErpView() {
                       </td>
                       <td className="num">{qty(s.allocated)}</td>
                       <td className="num">{qty(s.available)}</td>
-                      <td className="num">{qty(s.safetyStock)}</td>
+                      <td className="num">{s.quarantine ? qty(s.quarantine) : '—'}</td>
+                      <td className="num">{s.type === 'FG' ? '—' : qty(s.safetyStock)}</td>
                     </tr>
                   ))}
               </tbody>

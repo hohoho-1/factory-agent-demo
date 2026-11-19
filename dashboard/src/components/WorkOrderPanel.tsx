@@ -1,5 +1,5 @@
 import type { QualityAssessment, SetpointChange, WorkOrder, WorkOrderStatus } from '../api'
-import { QUALITY_LEVEL_LABEL, QUALITY_STATUS_LABEL } from './QualityCard'
+import { QUALITY_LEVEL_LABEL, qualityChip } from './QualityCard'
 import { formatTime } from '../format'
 import { SETPOINT_STATUS_LABEL, withUnit } from './SetpointCard'
 import { StatusBadge } from './StatusBadge'
@@ -43,7 +43,7 @@ function statusText(wo: WorkOrder): string {
 function QualityLine({ q }: { q: QualityAssessment }) {
   return (
     <div className="wo__setpoint">
-      <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{QUALITY_STATUS_LABEL[q.status]}</span>
+      <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{qualityChip(q)}</span>
       <span>품질: {QUALITY_LEVEL_LABEL[q.level]}</span>
     </div>
   )

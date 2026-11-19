@@ -3,7 +3,7 @@ import { getJson, type BatchRecord, type BatchRun } from '../api'
 import { EQUIPMENT_BY_ID, METRIC_LABEL, PHASE_LABEL } from '../equipment'
 import { formatDuration, formatTime, formatValue } from '../format'
 import { StatusBadge } from './StatusBadge'
-import { QUALITY_LEVEL_LABEL, QUALITY_STATUS_LABEL } from './QualityCard'
+import { QUALITY_LEVEL_LABEL, qualityChip } from './QualityCard'
 import { SETPOINT_STATUS_LABEL, withUnit } from './SetpointCard'
 
 interface Props {
@@ -155,7 +155,7 @@ function BatchRecordModal({ id, onClose }: { id: number; onClose: () => void }) 
                   {record.qualityAssessments.map((q) => (
                     <li key={q.id}>
                       {formatTime(q.createdAt)} WO-{q.workOrderId} · <b>{QUALITY_LEVEL_LABEL[q.level]}</b> ·{' '}
-                      {QUALITY_STATUS_LABEL[q.status]}
+                      {qualityChip(q)}
                       {q.decidedBy && ` · ${q.decidedBy}`}
                       <div className="muted">{q.basis}</div>
                     </li>

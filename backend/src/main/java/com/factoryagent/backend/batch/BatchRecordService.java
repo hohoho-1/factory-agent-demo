@@ -143,11 +143,20 @@ public class BatchRecordService {
         if (run.getStatus() == BatchRun.Status.RUNNING) {
             return base;
         }
-        long approvedHolds = assessments.stream().filter(q -> q.getLevel() == QualityAssessment.Level.HOLD
-                && q.getStatus() == QualityAssessment.Status.APPROVED).count();
+        long failed = assessments.stream().filter(q -> q.getDisposition() == QualityAssessment.Disposition.FAIL).count();
+        long approvedHolds = assessments.stream().filter(QualityAssessment::isHeld).count();
+        long passed = assessments.stream().filter(q -> q.getDisposition() == QualityAssessment.Disposition.PASS).count();
         long pendingHolds = assessments.stream().filter(q -> q.getStatus() == QualityAssessment.Status.PENDING).count();
+        if (failed > 0) {
+            return new Verdict("HOLD", "품질 검사 불합격. 배치 폐기", base.alarmCount(), base.criticalCount(),
+                    base.openActions());
+        }
         if (approvedHolds > 0) {
-            return new Verdict("HOLD", "품질팀이 배치 홀드를 승인함. 출하 보류", base.alarmCount(), base.criticalCount(),
+            return new Verdict("HOLD", "품질팀이 배치 홀드를 승인함. 출하 보류 (검사 판정 대기)", base.alarmCount(),
+                    base.criticalCount(), base.openActions());
+        }
+        if (passed > 0 && pendingHolds == 0) {
+            return new Verdict(base.level(), base.text() + " · 홀드 후 검사 합격", base.alarmCount(), base.criticalCount(),
                     base.openActions());
         }
         if (pendingHolds > 0) {

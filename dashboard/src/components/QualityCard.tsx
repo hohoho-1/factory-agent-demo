@@ -9,6 +9,14 @@ export const QUALITY_LEVEL_LABEL: Record<QualityLevel, string> = {
   HOLD: '배치 홀드 · 출하 보류 권고',
 }
 
+/** 목록 칩: 홀드 승인 뒤 판정까지 반영한 상태 */
+export function qualityChip(q: { status: QualityStatus; disposition: 'PASS' | 'FAIL' | null }): string {
+  if (q.disposition === 'PASS') return '검사 합격'
+  if (q.disposition === 'FAIL') return '검사 불합격'
+  if (q.status === 'APPROVED') return '출하 보류 · 검사 대기'
+  return QUALITY_STATUS_LABEL[q.status]
+}
+
 export const QUALITY_STATUS_LABEL: Record<QualityStatus, string> = {
   RECORDED: '기록됨',
   PENDING: '품질팀 승인 대기',
@@ -43,7 +51,26 @@ function useQualityDecision(q: QualityAssessment, onUpdated: (q: QualityAssessme
       setBusy(false)
     }
   }
-  return { busy, error, decide }
+  /** 홀드 배치의 검사 판정 (합격 / 불합격). ERP 재고 · 재생산으로 이어진다 */
+  const dispose = async (result: 'PASS' | 'FAIL', worker: string) => {
+    let note: string | null = null
+    if (result === 'FAIL') {
+      note = window.prompt('불합격 사유 (예: 상 분리, 점도 미달)', '')
+      if (note === null) return
+    } else if (!window.confirm('검사 합격으로 판정하고 보류를 풀까요? 출하할 수 있게 됩니다.')) {
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      onUpdated(await postJson<QualityAssessment>(`/api/quality-assessments/${q.id}/disposition`, { result, worker, note }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return { busy, error, decide, dispose }
 }
 
 /**
@@ -62,7 +89,7 @@ export function QualityInline({
   return (
     <div className={`alarm__quality quality--${q.level.toLowerCase()}`}>
       <div className="alarm__quality-row">
-        <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{QUALITY_STATUS_LABEL[q.status]}</span>
+        <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{qualityChip(q)}</span>
         <b>품질: {QUALITY_LEVEL_LABEL[q.level]}</b>
         <span className="muted">
           {formatTime(q.createdAt)} 판정{q.workOrderId == null ? ' · 지시서 작성 중' : ''}
@@ -90,14 +117,15 @@ export function QualityInline({
 export function QualityCard({ assessment: q, onUpdated }: Props) {
   const [worker, setWorker] = useState('')
   const [lastWorker] = useState(loadWorker)
-  const { busy, error, decide: send } = useQualityDecision(q, onUpdated)
+  const { busy, error, decide: send, dispose } = useQualityDecision(q, onUpdated)
+  const awaitingVerdict = q.level === 'HOLD' && q.status === 'APPROVED' && q.disposition == null
   const decide = (kind: 'approve' | 'reject') => send(kind, worker)
 
   return (
     <section className={`quality quality--${q.level.toLowerCase()} quality--${q.status.toLowerCase()}`}>
       <header className="setpoint__head">
         <h2>품질 영향 판정</h2>
-        <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{QUALITY_STATUS_LABEL[q.status]}</span>
+        <span className={`chip quality-chip quality-chip--${q.status.toLowerCase()}`}>{qualityChip(q)}</span>
       </header>
       <div className="quality__level">
         <span className={`quality__badge quality__badge--${q.level.toLowerCase()}`}>{QUALITY_LEVEL_LABEL[q.level]}</span>
@@ -138,6 +166,31 @@ export function QualityCard({ assessment: q, onUpdated }: Props) {
         <p className="setpoint__meta muted">
           {formatTime(q.decidedAt)} {q.status === 'APPROVED' ? '홀드 승인' : '홀드 거절'} · {q.decidedBy}
           {q.decisionNote && ` — ${q.decisionNote}`}
+          {q.status === 'APPROVED' && (q.holdReportedAt ? ' · ERP 출하 보류 반영' : ' · ERP 알림 대기')}
+        </p>
+      )}
+      {awaitingVerdict && (
+        <>
+          <p className="setpoint__meta">
+            출하 보류 중입니다. 샘플 검사 후 판정하세요. 합격이면 보류가 풀리고, 불합격이면 폐기하고 ERP가 모자란 수량만큼
+            재생산 오더를 계획합니다.
+          </p>
+          <div className="setpoint__decide">
+            <button className="button button--ghost" onClick={() => void dispose('FAIL', worker)} disabled={busy}>
+              검사 불합격 (폐기)
+            </button>
+            <button className="button" onClick={() => void dispose('PASS', worker)} disabled={busy}>
+              검사 합격 (보류 해제)
+            </button>
+          </div>
+        </>
+      )}
+      {q.disposition && (
+        <p className={`setpoint__meta quality__verdict quality__verdict--${q.disposition.toLowerCase()}`}>
+          {q.dispositionAt && formatTime(q.dispositionAt)} 검사 {q.disposition === 'PASS' ? '합격 · 보류 해제' : '불합격 · 폐기'} ·{' '}
+          {q.dispositionBy}
+          {q.dispositionNote && ` — ${q.dispositionNote}`}
+          {q.dispositionReportedAt ? ' · ERP 반영' : ' · ERP 알림 대기'}
         </p>
       )}
       {error && <p className="action__error">처리하지 못했습니다: {error}</p>}

@@ -75,6 +75,30 @@ public class QualityAssessment {
     @Column(name = "decision_note", length = 500)
     private String decisionNote;
 
+    public enum Disposition { PASS, FAIL }
+
+    /** 홀드 승인 뒤 검사 판정: 합격(보류 해제) / 불합격(폐기). 판정 전이면 null */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 8)
+    private Disposition disposition;
+
+    @Column(name = "disposition_by", length = 64)
+    private String dispositionBy;
+
+    @Column(name = "disposition_at")
+    private Instant dispositionAt;
+
+    @Column(name = "disposition_note", length = 500)
+    private String dispositionNote;
+
+    /** 홀드(승인)를 ERP 에 알린 시각 */
+    @Column(name = "hold_reported_at")
+    private Instant holdReportedAt;
+
+    /** 판정을 ERP 에 알린 시각 */
+    @Column(name = "disposition_reported_at")
+    private Instant dispositionReportedAt;
+
     protected QualityAssessment() {
     }
 
@@ -121,6 +145,33 @@ public class QualityAssessment {
         decide(Status.REJECTED, worker, note, at);
     }
 
+    /** 홀드(승인된 HOLD) 배치의 검사 판정. 승인되지 않은 판정이나 이미 판정한 건이면 IllegalStateException. */
+    public void dispose(Disposition result, String worker, String note, Instant at) {
+        if (level != Level.HOLD || status != Status.APPROVED) {
+            throw new IllegalStateException("품질팀이 승인한 홀드만 판정할 수 있습니다 (현재 " + status + ")");
+        }
+        if (disposition != null) {
+            throw new IllegalStateException("이미 판정했습니다 (" + disposition + ")");
+        }
+        disposition = result;
+        dispositionBy = worker;
+        dispositionAt = at;
+        dispositionNote = clip(note, 500);
+    }
+
+    public void holdReported(Instant at) {
+        holdReportedAt = at;
+    }
+
+    public void dispositionReported(Instant at) {
+        dispositionReportedAt = at;
+    }
+
+    /** 홀드가 확정되어 아직 판정을 기다리는 중 (출하 보류) */
+    public boolean isHeld() {
+        return level == Level.HOLD && status == Status.APPROVED && disposition == null;
+    }
+
     private void decide(Status to, String worker, String note, Instant at) {
         if (status != Status.PENDING) {
             throw new IllegalStateException("승인 대기 중인 판정이 아닙니다 (현재 " + status + ")");
@@ -151,4 +202,10 @@ public class QualityAssessment {
     public String getDecidedBy() { return decidedBy; }
     public Instant getDecidedAt() { return decidedAt; }
     public String getDecisionNote() { return decisionNote; }
+    public Disposition getDisposition() { return disposition; }
+    public String getDispositionBy() { return dispositionBy; }
+    public Instant getDispositionAt() { return dispositionAt; }
+    public String getDispositionNote() { return dispositionNote; }
+    public Instant getHoldReportedAt() { return holdReportedAt; }
+    public Instant getDispositionReportedAt() { return dispositionReportedAt; }
 }
