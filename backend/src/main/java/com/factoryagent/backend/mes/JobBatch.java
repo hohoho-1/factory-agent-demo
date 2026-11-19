@@ -62,6 +62,13 @@ public class JobBatch {
     @Column(name = "out_of_order", nullable = false)
     private boolean outOfOrder;
 
+    /** 오더 도중 다른 품목으로 바꾼 배치: 승인한 생산 책임자와 사유 */
+    @Column(name = "supervisor_by", length = 64)
+    private String supervisorBy;
+
+    @Column(name = "supervisor_reason", length = 300)
+    private String supervisorReason;
+
     protected JobBatch() {
     }
 
@@ -105,6 +112,11 @@ public class JobBatch {
         return true;
     }
 
+    void approvedBy(String supervisor, String reason) {
+        supervisorBy = supervisor;
+        supervisorReason = reason == null ? null : reason.length() > 300 ? reason.substring(0, 300) : reason;
+    }
+
     public void reported(Instant at) {
         reportedAt = at;
     }
@@ -122,4 +134,6 @@ public class JobBatch {
     public Instant getCompletedAt() { return completedAt; }
     public Instant getReportedAt() { return reportedAt; }
     public boolean isOutOfOrder() { return outOfOrder; }
+    public String getSupervisorBy() { return supervisorBy; }
+    public String getSupervisorReason() { return supervisorReason; }
 }

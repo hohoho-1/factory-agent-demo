@@ -154,6 +154,10 @@ powershell -File scripts\inject.ps1 mixer_underheat
    - 현장 지시가 여러 건이면 패널은 **ERP 계획 순서**(계획 시작일 순)로 보여 주고 맨 앞에 **다음 순서**를 붙인다. 라인이 하나라 한 번에 한 배치만 돌고, 먼저 누른 배치가 배합기를 차지한다. 앞 순서를 두고 뒤 지시의 배치를 누르면 "계획 순서상 PRD-… 이 먼저입니다"로 한 번 멈추고, 확인하면 **순서 변경**으로 기록하고 시작한다.
 6. 약 3분 뒤 배치가 끝나면 패널에 "PRD-…-01 완료 · ERP 보고됨"이 뜬다. (ERP 초기화를 해도 오더 번호는 이어서 매긴다: MES 에 남은 지시와 섞이지 않게) **ERP · 경영**의 생산 오더가 "생산 중 · 배치 1/3 · 2,000파우치"가 되고, 재고에서 원료 · 포장재가 BOM 표준량만큼 빠지고 완제품이 들어온다.
 
+   - (제품 전환) 마지막 배치와 다른 품목의 배치를 시작하면 "품목이 바뀝니다 … 배합기 세정과 라인 클리어런스를 먼저 하세요"로 막힌다. 생산 지시 패널 위 배합기 칸에서 **세정 시작**(약 45초) → **라인 클리어런스 확인** → 다른 품목을 시작할 수 있다. 다른 오더가 도중이면 생산 책임자 이름 · 사유를 먼저 묻는다.
+
+> "같은 제품은 몰아서 만들고, 제품을 바꿀 때는 세정과 라인 클리어런스를 기록으로 남깁니다. 향료 · 색소가 섞이면 품질 문제이고, GMP 공장은 이 절차를 기록으로 증명해야 합니다."
+
 7. (품질 → ERP) 생산 지시 배치가 유화 단계일 때 `inject.ps1 mixer_underheat` → 위험 지시서의 품질 카드에서 **홀드 승인**. 배치가 끝나면 ERP 의 상단 **품질 보류**에 그 배치 수량이 잡히고, 주문에 "납기 위험: 품질 보류 N파우치 (검사 판정 대기)" · **출하 보류**가 뜬다 (출하 버튼이 막힌다). 품질 카드에서 **검사 불합격 (폐기)** → ERP 생산 오더에 **재생산** 오더가 새로 생기고 일정 · 납기가 다시 계산된다. **검사 합격**이면 보류가 풀리고 출하할 수 있다.
 
 > "품질 판정 한 번이 출하 · 재고 · 납기까지 이어집니다. 홀드는 품질팀이 승인하고, 합격 · 불합격도 품질팀이 정합니다. 시스템은 그 결정을 ERP 의 숫자로 바꿔 줄 뿐입니다."
@@ -248,7 +252,7 @@ OPC UA 보안 설정, Modbus 같은 다른 프로토콜, 태그·설비 마스�
 알람·지시서 기록을 비우고 깨끗한 화면에서 시작하려면, 데모 전용 DB에서 아래를 실행합니다.
 
 ```sql
-TRUNCATE production_job_batch, production_job, quality_assessment, batch_run, alarm_shelf, setpoint_audit, setpoint_change, work_order, alarm, sensor_reading RESTART IDENTITY;
+TRUNCATE line_changeover, production_job_batch, production_job, quality_assessment, batch_run, alarm_shelf, setpoint_audit, setpoint_change, work_order, alarm, sensor_reading RESTART IDENTITY;
 ```
 
 데이터가 비면 차트도 비므로, 초기화한 뒤 5분 정도 띄워 두고 시작합니다.

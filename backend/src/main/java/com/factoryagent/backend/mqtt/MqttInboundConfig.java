@@ -74,6 +74,11 @@ public class MqttInboundConfig {
                 .handle(String.class, (payload, headers) -> {
                     try {
                         JsonNode node = objectMapper.readTree(payload);
+                        if (BatchRequestPublisher.CLEAN_TAG.equals(node.path("tag").asText())) {
+                            mesService.onCleanResult(node.hasNonNull("requestId") ? node.get("requestId").asLong() : null,
+                                    node.path("status").asText(), node.path("message").asText(null));
+                            return null;
+                        }
                         if (BatchRequestPublisher.TAG.equals(node.path("tag").asText())) {
                             // MES 배치 시작 요청의 결과 (설정값이 아니라 명령 태그)
                             mesService.onCommandResult(node.hasNonNull("requestId") ? node.get("requestId").asLong() : null,

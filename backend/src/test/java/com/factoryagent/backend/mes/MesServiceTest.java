@@ -32,8 +32,11 @@ class MesServiceTest {
     private final JobBatchRepository batches = mock(JobBatchRepository.class);
     private final BatchStateTracker tracker = mock(BatchStateTracker.class);
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
+    private final LineChangeoverRepository changeovers = mock(LineChangeoverRepository.class);
+    private final com.factoryagent.backend.batch.CipStateTracker cip = new com.factoryagent.backend.batch.CipStateTracker();
     private final MesService service = new MesService(jobs, batches, tracker, events,
-            Optional.of(Clock.fixed(T0, ZoneOffset.UTC)));
+            Optional.of(Clock.fixed(T0, ZoneOffset.UTC)), changeovers, cip);
+    private LineChangeover lastChangeover;
     private final Map<String, JobBatch> byBatchId = new HashMap<>();
     private long nextId = 1;
 
@@ -55,6 +58,17 @@ class MesServiceTest {
         when(batches.findByBatchId(anyString())).thenAnswer(inv -> Optional.ofNullable(byBatchId.get(inv.getArgument(0))));
         when(batches.save(any(JobBatch.class))).thenAnswer(inv -> inv.getArgument(0));
         when(tracker.current("MIXER-01")).thenReturn(Optional.empty());
+        when(changeovers.save(any(LineChangeover.class))).thenAnswer(inv -> {
+            lastChangeover = inv.getArgument(0);
+            if (lastChangeover.getId() == null) {
+                ReflectionTestUtils.setField(lastChangeover, "id", 900L);
+            }
+            return lastChangeover;
+        });
+        when(changeovers.findTopByEquipmentIdOrderByRequestedAtDesc("MIXER-01"))
+                .thenAnswer(inv -> Optional.ofNullable(lastChangeover));
+        when(changeovers.findByCipId(anyString())).thenAnswer(inv -> Optional.ofNullable(lastChangeover));
+        when(changeovers.findById(any())).thenAnswer(inv -> Optional.ofNullable(lastChangeover));
     }
 
     private ProductionJob job(int qty, int batchCount) {
@@ -146,7 +160,76 @@ class MesServiceTest {
                 .hasMessageContaining("PRD-0001");
         JobBatch b = service.startNextBatch(11L, "kim", true);
         assertThat(b.isOutOfOrder()).isTrue();
-        assertThat(service.startNextBatch(10L, "kim").isOutOfOrder()).isFalse();  // 앞 순서는 확인 없이
+    }
+
+    /** 품목 A 지시(PRD-0001, 3배치)와 품목 B 지시(PRD-0002, 1배치). A 를 한 배치 끝낸 상태 */
+    private ProductionJob[] twoProductsAfterOneBatchOfA() {
+        ProductionJob a = job(6000, 3);
+        ProductionJob b = ProductionJob.receive("PRD-0002", "CAP-B15", "캡슐 세제 B 15개입", 2000, 1,
+                LocalDate.of(2026, 11, 18), T0.plusSeconds(60));   // 계획상 B 가 앞서도
+        ReflectionTestUtils.setField(b, "id", 11L);
+        when(jobs.findById(11L)).thenReturn(Optional.of(b));
+        when(jobs.save(b)).thenAnswer(inv -> {
+            for (JobBatch x : b.getBatches()) {
+                if (x.getId() == null) {
+                    ReflectionTestUtils.setField(x, "id", nextId++);
+                }
+                byBatchId.put(x.getBatchId(), x);
+            }
+            return b;
+        });
+        when(jobs.findTop20ByOrderByCreatedAtDesc()).thenReturn(List.of(b, a));
+        service.startNextBatch(10L, "kim", true);
+        phase("PRD-0001-01", "DISCHARGING", null, "IDLE");
+        return new ProductionJob[]{a, b};
+    }
+
+    private void cipState(String state, String id) {
+        cip.observe("MIXER-01", Map.of("cipState", state, "cipId", id), T0).ifPresent(service::onCip);
+    }
+
+    @Test
+    void switchingProductMidOrderNeedsSupervisorAndCleaning() {
+        twoProductsAfterOneBatchOfA();
+        cipState("IDLE", "");
+        // 오더 도중 다른 품목: 책임자 승인이 먼저 필요하다
+        assertThatThrownBy(() -> service.startNextBatch(11L, "kim", true))
+                .isInstanceOf(MesRuleException.class).hasMessageContaining("생산 책임자 승인");
+        // 승인이 있어도 세정 없이는 시작할 수 없다
+        assertThatThrownBy(() -> service.startNextBatch(11L, "kim", true, "박팀장", "긴급 주문"))
+                .isInstanceOfSatisfying(MesRuleException.class, e -> assertThat(e.getCode()).isEqualTo("CHANGEOVER_REQUIRED"));
+        assertThat(service.lineState().cleanState()).isEqualTo("PRODUCT");
+
+        LineChangeover c = service.startClean("kim");
+        verify(events).publishEvent(new CleanRequestedEvent(900L, "MIXER-01", c.getCipId(), "kim"));
+        cipState("CLEANING", c.getCipId());
+        assertThatThrownBy(() -> service.startNextBatch(11L, "kim", true, "박팀장", "긴급")).hasMessageContaining("세정 중");
+        cipState("IDLE", "");
+        assertThat(service.lineState().cleanState()).isEqualTo("CLEANED");
+        assertThatThrownBy(() -> service.startNextBatch(11L, "kim", true, "박팀장", "긴급"))
+                .isInstanceOfSatisfying(MesRuleException.class, e -> assertThat(e.getCode()).isEqualTo("CLEARANCE_REQUIRED"));
+
+        service.confirmClearance("lee");
+        assertThat(service.lineState().cleanState()).isEqualTo("CLEARED");
+        JobBatch b = service.startNextBatch(11L, "kim", false, "박팀장", "긴급 주문");
+        assertThat(b.getSupervisorBy()).isEqualTo("박팀장");
+        assertThat(b.getSupervisorReason()).isEqualTo("긴급 주문");
+    }
+
+    @Test
+    void sameProductContinuesWithoutCleaning() {
+        twoProductsAfterOneBatchOfA();
+        assertThat(service.lineState().lastItemCode()).isEqualTo("CAP-A30");
+        assertThat(service.startNextBatch(10L, "kim", true).getBatchId()).isEqualTo("PRD-0001-02");
+    }
+
+    @Test
+    void plcRejectedCleaningIsFailed() {
+        twoProductsAfterOneBatchOfA();
+        LineChangeover c = service.startClean("kim");
+        service.onCleanResult(c.getId(), "INTERLOCKED", "배치 진행 중이라 세정할 수 없습니다");
+        assertThat(c.getStatus()).isEqualTo(LineChangeover.Status.FAILED);
+        assertThat(service.lineState().cleanState()).isEqualTo("PRODUCT");
     }
 
     @Test

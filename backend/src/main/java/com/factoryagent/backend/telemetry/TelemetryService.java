@@ -26,14 +26,17 @@ public class TelemetryService {
     private final AlarmService alarmService;
     private final ApplicationEventPublisher events;
     private final BatchStateTracker batches;
+    private final com.factoryagent.backend.batch.CipStateTracker cip;
 
     public TelemetryService(ObjectMapper objectMapper, SensorReadingRepository repository,
-                            AlarmService alarmService, ApplicationEventPublisher events, BatchStateTracker batches) {
+                            AlarmService alarmService, ApplicationEventPublisher events, BatchStateTracker batches,
+                            com.factoryagent.backend.batch.CipStateTracker cip) {
         this.objectMapper = objectMapper;
         this.repository = repository;
         this.alarmService = alarmService;
         this.events = events;
         this.batches = batches;
+        this.cip = cip;
     }
 
     /** MQTT payload(JSON) 1건을 지표별 행으로 펼쳐 저장하고 이상 여부를 판정한다. 형식이 잘못된 메시지는 버린다. */
@@ -66,6 +69,7 @@ public class TelemetryService {
             alarmService.onPhaseChange(e);
             events.publishEvent(e);
         });
+        cip.observe(msg.equipmentId(), msg.state(), measuredAt).ifPresent(events::publishEvent);
         rows.forEach(alarmService::evaluate);
         events.publishEvent(new ReadingsSavedEvent(rows));
         log.debug("saved {} readings from {}", rows.size(), msg.equipmentId());

@@ -1,6 +1,8 @@
 package com.factoryagent.backend.mes;
 
 import com.factoryagent.backend.batch.BatchPhaseEvent;
+import com.factoryagent.backend.batch.CipStateEvent;
+import com.factoryagent.backend.batch.CipStateTracker;
 import com.factoryagent.backend.batch.BatchState;
 import com.factoryagent.backend.batch.BatchStateTracker;
 import org.slf4j.Logger;
@@ -36,14 +38,113 @@ public class MesService {
     private final BatchStateTracker tracker;
     private final ApplicationEventPublisher events;
     private final Clock clock;
+    private final LineChangeoverRepository changeovers;
+    private final CipStateTracker cip;
 
     public MesService(ProductionJobRepository jobs, JobBatchRepository batches, BatchStateTracker tracker,
-                      ApplicationEventPublisher events, Optional<Clock> clock) {
+                      ApplicationEventPublisher events, Optional<Clock> clock, LineChangeoverRepository changeovers,
+                      CipStateTracker cip) {
         this.jobs = jobs;
         this.batches = batches;
         this.tracker = tracker;
         this.events = events;
         this.clock = clock.orElse(Clock.systemUTC());
+        this.changeovers = changeovers;
+        this.cip = cip;
+    }
+
+    /**
+     * 배합기 상태: 마지막으로 만든 품목과 제품 전환(세정 · 클리어런스) 진행.
+     * cleanState: NONE(아직 생산 없음, 어떤 품목이든 가능) / PRODUCT(마지막 품목으로 오염, 같은 품목만 가능) /
+     *             CLEANING(세정 중) / CLEANED(세정 완료, 클리어런스 대기) / CLEARED(어떤 품목이든 가능)
+     */
+    public record LineState(String equipmentId, String lastItemCode, String lastItemName, String lastBatchId,
+                            String cleanState, LineChangeover changeover) {
+
+        boolean allows(String itemCode) {
+            return switch (cleanState) {
+                case "NONE", "CLEARED" -> true;
+                case "PRODUCT" -> itemCode.equals(lastItemCode);
+                default -> false;
+            };
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public LineState lineState() {
+        Optional<JobBatch> last = jobs.findTop20ByOrderByCreatedAtDesc().stream()
+                .flatMap(j -> j.getBatches().stream())
+                .filter(b -> b.getStatus() != JobBatch.Status.FAILED)
+                .max(java.util.Comparator.comparing(JobBatch::getRequestedAt));
+        Optional<LineChangeover> co = changeovers.findTopByEquipmentIdOrderByRequestedAtDesc(MIXER);
+        // 마지막 배치 뒤에 시작한 세정만 의미가 있다
+        Optional<LineChangeover> after = co.filter(c -> last.isEmpty()
+                || !c.getRequestedAt().isBefore(last.get().getRequestedAt()));
+        String state;
+        if (after.isPresent() && after.get().getStatus() != LineChangeover.Status.FAILED) {
+            state = after.get().getStatus().name();
+        } else {
+            state = last.isEmpty() ? "NONE" : "PRODUCT";
+        }
+        return new LineState(MIXER, last.map(b -> b.getJob().getItemCode()).orElse(null),
+                last.map(b -> b.getJob().getItemName()).orElse(null), last.map(JobBatch::getBatchId).orElse(null),
+                state, after.orElse(co.orElse(null)));
+    }
+
+    /** 작업자가 배합기 세정(CIP)을 시작한다. 커밋 후 PLC 에 세정 요청이 내려간다. */
+    @Transactional
+    public LineChangeover startClean(String worker) {
+        Optional<BatchState> mixer = tracker.current(MIXER);
+        if (mixer.isPresent() && mixer.get().running()) {
+            throw new IllegalStateException("배합기에서 배치 " + mixer.get().batchId() + " 가 진행 중이라 세정할 수 없습니다");
+        }
+        LineState line = lineState();
+        if ("CLEANING".equals(line.cleanState()) || cip.cleaning(MIXER)) {
+            throw new IllegalStateException("이미 세정 중입니다");
+        }
+        Instant now = Instant.now(clock);
+        String cipId = "CIP-" + java.time.format.DateTimeFormatter.ofPattern("MMdd-HHmmss")
+                .withZone(java.time.ZoneId.systemDefault()).format(now);
+        LineChangeover c = changeovers.save(LineChangeover.start(MIXER, cipId, line.lastItemCode(), line.lastItemName(),
+                worker, now));
+        events.publishEvent(new CleanRequestedEvent(c.getId(), MIXER, cipId, worker));
+        log.info("[MES] cleaning {} requested by {} (after {})", cipId, worker, line.lastItemName());
+        return c;
+    }
+
+    /** 세정이 끝난 뒤 작업자가 이전 제품의 자재 · 라벨이 라인에 남지 않았음을 확인한다. */
+    @Transactional
+    public LineChangeover confirmClearance(String worker) {
+        LineChangeover c = changeovers.findTopByEquipmentIdOrderByRequestedAtDesc(MIXER)
+                .orElseThrow(() -> new IllegalStateException("진행 중인 세정이 없습니다"));
+        c.cleared(worker, Instant.now(clock));
+        return changeovers.save(c);
+    }
+
+    /** PLC 세정 상태가 CLEANING → IDLE 로 바뀌면 그 세정을 완료로 기록한다. */
+    @EventListener
+    @Transactional
+    public void onCip(CipStateEvent e) {
+        if ("CLEANING".equals(e.previous()) && "IDLE".equals(e.current()) && e.previousCipId() != null) {
+            changeovers.findByCipId(e.previousCipId()).ifPresent(c -> {
+                c.cleaned(e.at());
+                changeovers.save(c);
+                log.info("[MES] cleaning {} completed", c.getCipId());
+            });
+        }
+    }
+
+    /** 게이트웨이의 세정 요청 결과: APPLIED 가 아니면(인터록 거부 등) 세정을 실패로 닫는다. */
+    @Transactional
+    public void onCleanResult(Long requestId, String status, String message) {
+        if (requestId == null || "APPLIED".equals(status)) {
+            return;
+        }
+        changeovers.findById(requestId).ifPresent(c -> {
+            c.failed(message);
+            changeovers.save(c);
+            log.warn("[MES] cleaning {} rejected by PLC: {}", c.getCipId(), message);
+        });
     }
 
     public record JobRequest(String erpOrderNo, String itemCode, String itemName, Integer qty, Integer batches,
@@ -101,20 +202,55 @@ public class MesService {
      */
     @Transactional
     public JobBatch startNextBatch(Long jobId, String worker) {
-        return startNextBatch(jobId, worker, false);
+        return startNextBatch(jobId, worker, false, null, null);
+    }
+
+    @Transactional
+    public JobBatch startNextBatch(Long jobId, String worker, boolean confirmOutOfOrder) {
+        return startNextBatch(jobId, worker, confirmOutOfOrder, null, null);
     }
 
     /**
      * confirmOutOfOrder: 계획 순서상 앞선 지시가 남아 있어도 작업자가 확인하고 먼저 시작한다.
      * 확인 없이 순서를 건너뛰면 OutOfOrderException (화면이 확인을 받고 다시 보낸다).
      */
+    /**
+     * supervisor · supervisorReason: 오더 도중 다른 품목으로 바꿀 때 생산 책임자 승인. 승인이 있으면 계획 순서 확인은 생략한다.
+     * 규칙(순서대로): 배합기 사용 중 → 세정 중 → 오더 도중 품목 전환(책임자 승인) → 품목 전환(세정 · 클리어런스) → 계획 순서.
+     */
     @Transactional
-    public JobBatch startNextBatch(Long jobId, String worker, boolean confirmOutOfOrder) {
+    public JobBatch startNextBatch(Long jobId, String worker, boolean confirmOutOfOrder, String supervisor,
+                                  String supervisorReason) {
         ProductionJob job = jobs.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("생산 지시 #" + jobId + " 가 없습니다"));
         Optional<BatchState> mixer = tracker.current(MIXER);
         if (mixer.isPresent() && mixer.get().running()) {
             throw new IllegalStateException("배합기에서 배치 " + mixer.get().batchId() + " 가 진행 중입니다");
+        }
+        if (cip.cleaning(MIXER)) {
+            throw new IllegalStateException("배합기 세정 중입니다");
+        }
+        boolean approved = supervisor != null && !supervisor.isBlank();
+        Optional<ProductionJob> unfinished = jobs.findTop20ByOrderByCreatedAtDesc().stream()
+                .filter(j -> !j.getId().equals(job.getId()) && j.getStatus() == ProductionJob.Status.IN_PROGRESS
+                        && j.getBatchesDone() > 0 && !j.getItemCode().equals(job.getItemCode()))
+                .findFirst();
+        if (unfinished.isPresent() && !approved) {
+            ProductionJob u = unfinished.get();
+            throw new MesRuleException("SUPERVISOR_REQUIRED", u.getErpOrderNo() + "(" + u.getItemName() + ")이 "
+                    + u.getBatchesTotal() + "배치 중 " + u.getBatchesDone() + "배치까지 진행 중입니다."
+                    + " 오더 도중 다른 품목으로 바꾸려면 생산 책임자 승인이 필요합니다");
+        }
+        LineState line = lineState();
+        if (!line.allows(job.getItemCode())) {
+            if ("CLEANED".equals(line.cleanState())) {
+                throw new MesRuleException("CLEARANCE_REQUIRED", "세정이 끝났습니다. 라인 클리어런스(이전 제품 자재 제거)를 확인하세요");
+            }
+            throw new MesRuleException("CHANGEOVER_REQUIRED", "품목이 바뀝니다 (" + line.lastItemName() + " → "
+                    + job.getItemName() + "). 배합기 세정과 라인 클리어런스를 먼저 하세요");
+        }
+        if (approved) {
+            confirmOutOfOrder = true;  // 책임자 승인이 순서 변경 확인을 겸한다
         }
         Optional<ProductionJob> ahead = jobs.findTop20ByOrderByCreatedAtDesc().stream()
                 .filter(j -> j.getStatus() != ProductionJob.Status.COMPLETED && !j.getId().equals(job.getId()))
@@ -124,6 +260,10 @@ public class MesService {
             throw new OutOfOrderException(ahead.get());
         }
         JobBatch b = job.openNextBatch(worker, Instant.now(clock), ahead.isPresent());
+        if (approved) {
+            b.approvedBy(supervisor.trim(), supervisorReason);
+            log.warn("[MES] {} switched mid-order, approved by {}: {}", job.getErpOrderNo(), supervisor, supervisorReason);
+        }
         if (ahead.isPresent()) {
             log.warn("[MES] {} started before {} by {} (out of plan order)", job.getErpOrderNo(),
                     ahead.get().getErpOrderNo(), worker);

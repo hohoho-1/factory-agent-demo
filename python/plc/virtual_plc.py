@@ -32,7 +32,7 @@ from asyncua import Server, ua
 
 from sensors.virtual_sensors import CONTROL_TOPIC, SCENARIOS
 
-from .process import (BATCH_REQUEST_TAG, BATCH_START, MIXER_ID, PLC_RAMP_SCENARIOS, PLC_SCENARIOS, SETPOINT_TAGS,
+from .process import (BATCH_REQUEST_TAG, BATCH_START, CLEAN_REQUEST_TAG, MIXER_ID, PLC_RAMP_SCENARIOS, PLC_SCENARIOS, SETPOINT_TAGS,
                       InterlockError, LineProcess)
 
 NAMESPACE_URI = "urn:factory-agent-demo:line1"
@@ -113,6 +113,14 @@ class VirtualPlc:
                                        "CMD")
                 await req.set_writable()
                 self.server.set_attribute_value_setter(req.nodeid, self._batch_request_setter(eq_id))
+                # MES 세정(CIP) 요청: 배치 중이거나 이미 세정 중이면 인터록이 거부한다
+                cip = await obj.add_variable(node_id(idx, eq_id, CLEAN_REQUEST_TAG),
+                                             ua.QualifiedName(CLEAN_REQUEST_TAG, idx), ua.Variant("", ua.VariantType.String))
+                await cip.add_property(node_id(idx, eq_id, CLEAN_REQUEST_TAG, "Role"), ua.QualifiedName("Role", idx),
+                                       "CMD")
+                await cip.set_writable()
+                self.server.set_attribute_value_setter(cip.nodeid, self._command_setter(eq_id, CLEAN_REQUEST_TAG,
+                                                                                        self.process.request_clean))
 
     def _setter(self, eq_id: str, tag: str):
         """SP 노드 쓰기 가로채기: 인터록을 통과한 값만 저장한다. 거부하면 상태 코드 예외로 응답한다."""
@@ -138,15 +146,19 @@ class VirtualPlc:
 
     def _batch_request_setter(self, eq_id: str):
         """batchRequest 쓰기: '배치번호|레시피' 로 배치를 시작한다. 인터록에 걸리면 상태 코드로 거부한다."""
+        return self._command_setter(eq_id, BATCH_REQUEST_TAG, self.process.request_batch)
+
+    def _command_setter(self, eq_id: str, tag: str, action):
+        """문자열 명령 태그(CMD) 쓰기: action(문자열)을 실행한다. 인터록에 걸리면 사유를 남기고 상태 코드로 거부한다."""
 
         def setter(node_data, attr, value: ua.DataValue) -> None:
             text = value.Value.Value if value.Value is not None else None
             if not isinstance(text, str):
                 raise ua.UaStatusCodeError(ua.StatusCodes.BadTypeMismatch)
             try:
-                self.process.request_batch(text)
+                action(text)
             except InterlockError as e:
-                print(f"[INTERLOCK] {eq_id}.{BATCH_REQUEST_TAG} <- {text!r} rejected: {e.code} {e.message}", flush=True)
+                print(f"[INTERLOCK] {eq_id}.{tag} <- {text!r} rejected: {e.code} {e.message}", flush=True)
                 asyncio.get_running_loop().create_task(self._write_interlock(eq_id, e.message))
                 raise ua.UaStatusCodeError(getattr(ua.StatusCodes, e.code)) from None
             node_data.attributes[attr].value = value

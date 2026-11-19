@@ -99,6 +99,22 @@ class BatchSequenceTest(unittest.TestCase):
         with self.assertRaises(InterlockError):
             LineProcess().request_batch("번호만")
 
+    def test_cleaning_sequence_and_interlocks(self):
+        p = LineProcess()
+        p.request_clean("CIP-1119-120000")
+        self.assertEqual(p.states()["MIXER-01"]["cipState"], "CLEANING")
+        with self.assertRaises(InterlockError) as busy:
+            p.request_batch("PRD-0002-01|캡슐 세제 B 15개입")   # 세정 중에는 배치를 시작할 수 없다
+        self.assertEqual(busy.exception.code, "BadInvalidState")
+        with self.assertRaises(InterlockError):
+            p.request_clean("CIP-again")                     # 이미 세정 중
+        for _ in range(45):
+            p.scan()
+        self.assertEqual(p.states()["MIXER-01"]["cipState"], "IDLE")
+        p.request_batch("PRD-0002-01|캡슐 세제 B 15개입")
+        with self.assertRaises(InterlockError):
+            p.request_clean("CIP-during-batch")              # 배치 중에는 세정할 수 없다
+
     def test_manual_batch_ids_do_not_repeat_after_restart(self):
         # PLC 를 다시 켜도(카운터 초기화) 시각이 들어가 같은 날 번호가 겹치지 않는다
         from datetime import datetime

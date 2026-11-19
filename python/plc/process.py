@@ -69,6 +69,9 @@ BATCH_START = "batch_start"  # 현장 HMI 의 배치 시작 버튼 시뮬레이�
 
 # MES 가 OPC UA 로 쓰는 배치 시작 요청 태그 (문자열 "배치번호|레시피"). 역할(Role) CMD
 BATCH_REQUEST_TAG = "batchRequest"
+# MES 가 쓰는 세정(CIP) 시작 요청 태그 (문자열 "세정번호"). 역할 CMD
+CLEAN_REQUEST_TAG = "cleanRequest"
+CIP_SECONDS = 45  # 데모용 세정 시퀀스 길이 (예비 헹굼 → 알칼리 세정 → 최종 헹굼을 하나로 줄임)
 
 
 @dataclass(frozen=True)
@@ -157,6 +160,8 @@ class LineProcess:
         self.by_id[MIXER_ID].metrics["temperature"] = Metric("temperature", "C", IDLE.temp_target, 0.15, 0.0, 120.0)
         self.injector = AnomalyInjector(self.line, {**SCENARIOS, **PLC_RAMP_SCENARIOS})
         self.batch = BatchSequencer()
+        self.cip_remaining = 0   # 세정 시퀀스 남은 스캔 수
+        self.cip_id = ""
         self.setpoints = {key: spec.initial for key, spec in SETPOINT_TAGS.items()}
         self.mixer_speed = NOMINAL_MIXER_RPM
         self.last: dict[str, dict[str, float]] = {}
@@ -210,13 +215,32 @@ class LineProcess:
             raise InterlockError("BadOutOfRange", f"배치 요청 형식이 틀렸습니다 ('배치번호|레시피'): {request!r}")
         if self.batch.running:
             raise InterlockError("BadInvalidState", f"배치 {self.batch.batch_id} 진행 중이라 새 배치를 시작할 수 없습니다")
+        if self.cip_remaining > 0:
+            raise InterlockError("BadInvalidState", "배합기 세정 중이라 배치를 시작할 수 없습니다")
         self.batch.start(batch_id=batch_id, recipe=recipe)
         print(f"[BATCH] {batch_id} started by MES: {recipe}", flush=True)
         return batch_id
 
+    def request_clean(self, request: str) -> str:
+        """
+        MES 의 세정(CIP) 요청. 인터록: 배치 중이거나 이미 세정 중이면 거부(BadInvalidState).
+        세정 시퀀스는 CIP_SECONDS 동안 돌고, 상태 태그 cipState 가 CLEANING → IDLE 로 바뀐다.
+        """
+        cip_id = request.strip()
+        if not cip_id or len(cip_id) > 32:
+            raise InterlockError("BadOutOfRange", f"세정 요청 형식이 틀렸습니다: {request!r}")
+        if self.batch.running:
+            raise InterlockError("BadInvalidState", f"배치 {self.batch.batch_id} 진행 중이라 세정할 수 없습니다")
+        if self.cip_remaining > 0:
+            raise InterlockError("BadInvalidState", f"이미 세정 중입니다 ({self.cip_id})")
+        self.cip_id, self.cip_remaining = cip_id, CIP_SECONDS
+        print(f"[CIP] {cip_id} started ({CIP_SECONDS}s)", flush=True)
+        return cip_id
+
     def states(self) -> dict[str, dict[str, str]]:
         """문자열 상태 태그 (설비별). 지금은 배합기의 배치 단계·배치 번호·레시피."""
-        return {MIXER_ID: self.batch.state()}
+        return {MIXER_ID: {**self.batch.state(), "cipState": "CLEANING" if self.cip_remaining > 0 else "IDLE",
+                           "cipId": self.cip_id if self.cip_remaining > 0 else ""}}
 
     def inject(self, name: str) -> bool:
         """이상 시나리오 시작 또는 배치 시작. 알 수 없는 이름이면 False."""
@@ -260,5 +284,9 @@ class LineProcess:
             out[eq.equipment_id] = values
         self.injector.tick()
         self.batch.tick()
+        if self.cip_remaining > 0:
+            self.cip_remaining -= 1
+            if self.cip_remaining == 0:
+                print(f"[CIP] {self.cip_id} completed", flush=True)
         self.last = out
         return out

@@ -23,6 +23,7 @@ import java.util.Map;
 public class BatchRequestPublisher {
 
     static final String TAG = "batchRequest";
+    static final String CLEAN_TAG = "cleanRequest";
     private static final Logger log = LoggerFactory.getLogger(BatchRequestPublisher.class);
 
     private final MessageChannel outboundChannel;
@@ -35,6 +36,23 @@ public class BatchRequestPublisher {
         this.outboundChannel = outboundChannel;
         this.objectMapper = objectMapper;
         this.topic = topic;
+    }
+
+    /** 세정(CIP) 요청: 같은 명령 경로로 PLC 의 cleanRequest 태그에 세정 번호를 쓴다. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onClean(com.factoryagent.backend.mes.CleanRequestedEvent e) {
+        try {
+            String json = objectMapper.writeValueAsString(Map.of(
+                    "requestId", e.requestId(),
+                    "equipmentId", e.equipmentId(),
+                    "tag", CLEAN_TAG,
+                    "value", e.cipId(),
+                    "approvedBy", e.worker()));
+            outboundChannel.send(MessageBuilder.withPayload(json).setHeader(MqttHeaders.TOPIC, topic).build());
+            log.info("[MES] clean request {} sent to {}", e.cipId(), topic);
+        } catch (Exception ex) {
+            log.warn("failed to publish clean request {}: {}", e.cipId(), ex.getMessage());
+        }
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)

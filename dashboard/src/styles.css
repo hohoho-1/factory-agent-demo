@@ -1628,3 +1628,28 @@ p {
   color: var(--status-critical);
   font-weight: 600;
 }
+
+/* 배합기 제품 전환 상태 */
+.mes__line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.mes__line--cleaning,
+.mes__line--cleaned {
+  border-color: color-mix(in srgb, var(--status-warning) 60%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 8%, transparent);
+}
+
+.mes__line--cleared,
+.mes__line--none {
+  border-color: color-mix(in srgb, var(--status-good) 45%, transparent);
+}
