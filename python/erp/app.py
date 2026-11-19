@@ -321,7 +321,7 @@ def release_to_mes(order_id: int) -> dict:
             raise HTTPException(409, "자재가 모자라 지시할 수 없습니다 (입고 뒤에 지시): "
                                      + ", ".join(r["item_code"] for r in short))
         payload = {"erpOrderNo": p["order_no"], "itemCode": p["item_code"], "itemName": p["item_name"],
-                   "qty": p["qty"], "batches": p["batches"]}
+                   "qty": p["qty"], "batches": p["batches"], "plannedStart": p["planned_start"].isoformat()}
         try:
             req = urllib.request.Request(f"{MES_BASE_URL}/api/mes/jobs", method="POST",
                                          data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),

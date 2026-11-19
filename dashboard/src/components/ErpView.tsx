@@ -398,14 +398,9 @@ export function ErpView() {
                         {short.length ? short.map((m) => `${m.itemCode} ${qty(m.shortage)}`).join(', ') : '없음'}
                       </td>
                       <td>
-                        {PO_STATUS[p.status]}
-                        {p.status !== 'PLANNED' && (
-                          <div className="muted">
-                            배치 {p.batchesDone}/{p.batches} · {qty(p.producedQty)}파우치
-                          </div>
-                        )}
-                        {p.status === 'PLANNED' && (
-                          <div>
+                        <div className="erp__status">
+                          <span>{PO_STATUS[p.status]}</span>
+                          {p.status === 'PLANNED' && (
                             <button
                               className="button button--ghost"
                               disabled={busy || short.length > 0}
@@ -414,6 +409,11 @@ export function ErpView() {
                             >
                               현장 지시
                             </button>
+                          )}
+                        </div>
+                        {p.status !== 'PLANNED' && (
+                          <div className="muted">
+                            배치 {p.batchesDone}/{p.batches} · {qty(p.producedQty)}파우치
                           </div>
                         )}
                       </td>

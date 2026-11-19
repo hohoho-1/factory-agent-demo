@@ -12,6 +12,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -44,8 +46,31 @@ public class MesService {
         this.clock = clock.orElse(Clock.systemUTC());
     }
 
-    public record JobRequest(String erpOrderNo, String itemCode, String itemName, Integer qty, Integer batches) {
+    public record JobRequest(String erpOrderNo, String itemCode, String itemName, Integer qty, Integer batches,
+                             LocalDate plannedStart) {
     }
+
+    /** 계획 순서상 앞선 지시가 아직 끝나지 않았다. 작업자가 확인하면 '순서 변경'으로 시작할 수 있다. */
+    public static class OutOfOrderException extends RuntimeException {
+        private final String aheadOrderNo;
+
+        OutOfOrderException(ProductionJob ahead) {
+            super("계획 순서상 " + ahead.getErpOrderNo()
+                    + (ahead.getPlannedStart() == null ? "" : " (" + ahead.getPlannedStart() + " 시작 계획)")
+                    + " 이 먼저입니다");
+            this.aheadOrderNo = ahead.getErpOrderNo();
+        }
+
+        public String getAheadOrderNo() {
+            return aheadOrderNo;
+        }
+    }
+
+    /** 계획 순서: 끝나지 않은 지시 먼저, 계획 시작일 순(없으면 뒤로), 같으면 받은 순. */
+    static final Comparator<ProductionJob> PLAN_ORDER = Comparator
+            .comparing((ProductionJob j) -> j.getStatus() == ProductionJob.Status.COMPLETED)
+            .thenComparing(ProductionJob::getPlannedStart, Comparator.nullsLast(Comparator.naturalOrder()))
+            .thenComparing(ProductionJob::getCreatedAt);
 
     /** ERP 가 내려 준 생산 오더를 생산 지시로 받는다. 같은 오더를 두 번 보내면 처음 것을 돌려준다. */
     @Transactional
@@ -57,16 +82,17 @@ public class MesService {
         }
         return jobs.findByErpOrderNo(req.erpOrderNo()).orElseGet(() -> {
             ProductionJob job = jobs.save(ProductionJob.receive(req.erpOrderNo().trim(), req.itemCode(), req.itemName(),
-                    req.qty(), req.batches(), Instant.now(clock)));
+                    req.qty(), req.batches(), req.plannedStart(), Instant.now(clock)));
             log.info("[MES] job {} received from ERP: {} x{} in {} batches", job.getErpOrderNo(), job.getItemName(),
                     job.getQty(), job.getBatchesTotal());
             return job;
         });
     }
 
+    /** 최근 지시 20건을 계획 순서로. */
     @Transactional(readOnly = true)
     public List<ProductionJob> recent() {
-        return jobs.findTop20ByOrderByCreatedAtDesc();
+        return jobs.findTop20ByOrderByCreatedAtDesc().stream().sorted(PLAN_ORDER).toList();
     }
 
     /**
@@ -75,13 +101,33 @@ public class MesService {
      */
     @Transactional
     public JobBatch startNextBatch(Long jobId, String worker) {
+        return startNextBatch(jobId, worker, false);
+    }
+
+    /**
+     * confirmOutOfOrder: 계획 순서상 앞선 지시가 남아 있어도 작업자가 확인하고 먼저 시작한다.
+     * 확인 없이 순서를 건너뛰면 OutOfOrderException (화면이 확인을 받고 다시 보낸다).
+     */
+    @Transactional
+    public JobBatch startNextBatch(Long jobId, String worker, boolean confirmOutOfOrder) {
         ProductionJob job = jobs.findById(jobId)
                 .orElseThrow(() -> new IllegalArgumentException("생산 지시 #" + jobId + " 가 없습니다"));
         Optional<BatchState> mixer = tracker.current(MIXER);
         if (mixer.isPresent() && mixer.get().running()) {
             throw new IllegalStateException("배합기에서 배치 " + mixer.get().batchId() + " 가 진행 중입니다");
         }
-        JobBatch b = job.openNextBatch(worker, Instant.now(clock));
+        Optional<ProductionJob> ahead = jobs.findTop20ByOrderByCreatedAtDesc().stream()
+                .filter(j -> j.getStatus() != ProductionJob.Status.COMPLETED && !j.getId().equals(job.getId()))
+                .filter(j -> PLAN_ORDER.compare(j, job) < 0)
+                .min(PLAN_ORDER);
+        if (ahead.isPresent() && !confirmOutOfOrder) {
+            throw new OutOfOrderException(ahead.get());
+        }
+        JobBatch b = job.openNextBatch(worker, Instant.now(clock), ahead.isPresent());
+        if (ahead.isPresent()) {
+            log.warn("[MES] {} started before {} by {} (out of plan order)", job.getErpOrderNo(),
+                    ahead.get().getErpOrderNo(), worker);
+        }
         jobs.save(job);
         JobBatch saved = job.getBatches().get(job.getBatches().size() - 1);
         events.publishEvent(new JobBatchRequestedEvent(saved.getId(), MIXER, b.getBatchId(), job.getItemName(), worker));

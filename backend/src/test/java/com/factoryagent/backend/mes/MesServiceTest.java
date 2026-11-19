@@ -9,6 +9,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
@@ -57,7 +59,7 @@ class MesServiceTest {
 
     private ProductionJob job(int qty, int batchCount) {
         ProductionJob j = service.receive(new MesService.JobRequest("PRD-0001", "CAP-A30", "캡슐 세제 A 30개입", qty,
-                batchCount));
+                batchCount, LocalDate.of(2026, 11, 19)));
         when(jobs.findById(10L)).thenReturn(Optional.of(j));
         return j;
     }
@@ -130,8 +132,26 @@ class MesServiceTest {
     }
 
     @Test
+    void skippingThePlanOrderNeedsConfirmationAndIsRecorded() {
+        ProductionJob first = job(2222, 1);                                   // PRD-0001, 11/19 시작 계획
+        ProductionJob later = ProductionJob.receive("PRD-0002", "CAP-B15", "캡슐 세제 B 15개입", 4000, 1,
+                LocalDate.of(2026, 11, 20), T0.plusSeconds(60));
+        ReflectionTestUtils.setField(later, "id", 11L);
+        when(jobs.findById(11L)).thenReturn(Optional.of(later));
+        when(jobs.findTop20ByOrderByCreatedAtDesc()).thenReturn(List.of(later, first));
+
+        assertThat(service.recent()).extracting(ProductionJob::getErpOrderNo).containsExactly("PRD-0001", "PRD-0002");
+        assertThatThrownBy(() -> service.startNextBatch(11L, "kim"))
+                .isInstanceOf(MesService.OutOfOrderException.class)
+                .hasMessageContaining("PRD-0001");
+        JobBatch b = service.startNextBatch(11L, "kim", true);
+        assertThat(b.isOutOfOrder()).isTrue();
+        assertThat(service.startNextBatch(10L, "kim").isOutOfOrder()).isFalse();  // 앞 순서는 확인 없이
+    }
+
+    @Test
     void rejectsMalformedJobs() {
-        assertThatThrownBy(() -> service.receive(new MesService.JobRequest("PRD-1", "CAP-A30", "x", 3, 5)))
+        assertThatThrownBy(() -> service.receive(new MesService.JobRequest("PRD-1", "CAP-A30", "x", 3, 5, null)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

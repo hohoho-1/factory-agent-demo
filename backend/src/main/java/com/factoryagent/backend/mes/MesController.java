@@ -26,7 +26,8 @@ public class MesController {
         this.service = service;
     }
 
-    public record StartRequest(String worker) {
+    /** confirmOutOfOrder: 계획 순서상 앞선 지시를 두고 먼저 시작하는 것을 작업자가 확인했다 */
+    public record StartRequest(String worker, Boolean confirmOutOfOrder) {
     }
 
     @GetMapping("/api/mes/jobs")
@@ -42,12 +43,19 @@ public class MesController {
     @PostMapping("/api/mes/jobs/{id}/start-batch")
     public JobBatch startBatch(@PathVariable Long id, @RequestBody(required = false) StartRequest req) {
         String worker = req == null || req.worker() == null || req.worker().isBlank() ? "현장 작업자" : req.worker().trim();
-        return service.startNextBatch(id, worker);
+        return service.startNextBatch(id, worker, req != null && Boolean.TRUE.equals(req.confirmOutOfOrder()));
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> badRequest(IllegalArgumentException e) {
         return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+    }
+
+    /** 화면은 code 를 보고 작업자에게 확인을 받은 뒤 confirmOutOfOrder=true 로 다시 보낸다. */
+    @ExceptionHandler(MesService.OutOfOrderException.class)
+    public ResponseEntity<Map<String, String>> outOfOrder(MesService.OutOfOrderException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("code", "OUT_OF_ORDER", "message", e.getMessage(),
+                "aheadOrderNo", e.getAheadOrderNo()));
     }
 
     @ExceptionHandler(IllegalStateException.class)

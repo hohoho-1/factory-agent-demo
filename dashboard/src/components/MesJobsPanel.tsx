@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { getJson, postJson, type BatchState } from '../api'
+import { getJson, type BatchState } from '../api'
 import { formatTime } from '../format'
 import { loadWorker, saveWorker } from './WorkOrderAction'
 
@@ -15,6 +15,8 @@ interface JobBatch {
   requestedAt: string
   completedAt: string | null
   reportedAt: string | null
+  /** 계획 순서를 건너뛰고 작업자 확인 후 시작한 배치 */
+  outOfOrder: boolean
 }
 
 interface ProductionJob {
@@ -27,6 +29,8 @@ interface ProductionJob {
   batchesDone: number
   producedQty: number
   status: 'RECEIVED' | 'IN_PROGRESS' | 'COMPLETED'
+  /** ERP 생산 계획의 시작일. 목록은 이 순서로 온다 */
+  plannedStart: string | null
   createdAt: string
   batches: JobBatch[]
 }
@@ -67,12 +71,33 @@ export function MesJobsPanel({ mixerBatch }: Props) {
     return () => window.clearInterval(id)
   }, [load])
 
+  /**
+   * 배치 시작. 계획 순서상 앞선 지시가 남아 있으면 MES 가 409(OUT_OF_ORDER)로 멈추고,
+   * 작업자가 확인하면 '순서 변경'으로 기록하고 시작한다.
+   */
   const start = async (job: ProductionJob) => {
     setBusy(job.id)
     setError(null)
     const worker = loadWorker() ?? ''
+    const send = (confirmOutOfOrder: boolean) =>
+      fetch(`/api/mes/jobs/${job.id}/start-batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ worker, confirmOutOfOrder }),
+      })
     try {
-      await postJson(`/api/mes/jobs/${job.id}/start-batch`, { worker })
+      let res = await send(false)
+      if (res.status === 409) {
+        const body = (await res.json().catch(() => ({}))) as { code?: string; message?: string }
+        if (body.code !== 'OUT_OF_ORDER') throw new Error(body.message ?? 'HTTP 409')
+        if (!window.confirm(`${body.message}
+그래도 ${job.erpOrderNo}을(를) 먼저 시작할까요? 순서 변경으로 기록됩니다.`)) return
+        res = await send(true)
+      }
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { message?: string }
+        throw new Error(body.message ?? `HTTP ${res.status}`)
+      }
       if (worker) saveWorker(worker)
       await load()
     } catch (e) {
@@ -85,6 +110,8 @@ export function MesJobsPanel({ mixerBatch }: Props) {
   const open = jobs.filter((j) => j.status !== 'COMPLETED' || Date.now() - Date.parse(j.createdAt) < 30 * 60_000)
   if (open.length === 0) return null
   const mixerBusy = mixerBatch != null && mixerBatch.phase !== 'IDLE' && mixerBatch.batchId != null
+  // 목록은 계획 순서(끝나지 않은 지시 먼저, 계획 시작일 순)로 온다. 맨 앞의 미완료 지시가 다음 순서
+  const nextId = open.find((j) => j.status !== 'COMPLETED')?.id
 
   return (
     <section className="card panel mes">
@@ -93,7 +120,7 @@ export function MesJobsPanel({ mixerBatch }: Props) {
         <span className="count">{open.filter((j) => j.status !== 'COMPLETED').length}</span>
       </header>
       <ul className="mes__list">
-        {open.map((job) => {
+        {open.map((job, i) => {
           const last = job.batches[job.batches.length - 1]
           const active = job.batches.some((b) => b.status === 'REQUESTED' || b.status === 'RUNNING')
           const done = job.status === 'COMPLETED'
@@ -101,9 +128,14 @@ export function MesJobsPanel({ mixerBatch }: Props) {
           return (
             <li key={job.id} className="mes__job">
               <div className="mes__top">
+                <span className="mes__order">{i + 1}</span>
                 <strong>{job.erpOrderNo}</strong>
+                {job.id === nextId && <span className="chip chip--open mes__next">다음 순서</span>}
                 <span>{job.itemName}</span>
-                <span className="muted">{job.qty.toLocaleString('ko-KR')}파우치</span>
+                <span className="muted">
+                  {job.qty.toLocaleString('ko-KR')}파우치
+                  {job.plannedStart && ` · ${job.plannedStart.slice(5).replace('-', '/')} 시작 계획`}
+                </span>
               </div>
               <div className="mes__progress" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
                 <span style={{ width: `${pct}%` }} />
@@ -113,6 +145,7 @@ export function MesJobsPanel({ mixerBatch }: Props) {
                 {last && (
                   <span className={`mes__batch mes__batch--${last.status.toLowerCase()}`}>
                     {last.batchId} {BATCH_LABEL[last.status]}
+                    {last.outOfOrder && ' · 순서 변경'}
                     {last.status === 'COMPLETED' && (last.reportedAt ? ' · ERP 보고됨' : ' · ERP 보고 대기')}
                     {last.status === 'FAILED' && last.message && ` — ${last.message}`}
                   </span>

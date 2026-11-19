@@ -1596,3 +1596,25 @@ p {
   gap: 8px;
   font-size: 12px;
 }
+
+.erp__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.mes__order {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--axis);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.mes__next {
+  margin-left: 0;
+}

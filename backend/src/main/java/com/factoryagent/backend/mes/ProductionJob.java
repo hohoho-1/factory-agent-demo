@@ -14,6 +14,7 @@ import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -56,6 +57,10 @@ public class ProductionJob {
     @Column(nullable = false, length = 16)
     private Status status;
 
+    /** ERP 생산 계획의 시작일. MES 는 이 순서로 지시를 보여 준다 */
+    @Column(name = "planned_start")
+    private LocalDate plannedStart;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -70,13 +75,14 @@ public class ProductionJob {
     }
 
     public static ProductionJob receive(String erpOrderNo, String itemCode, String itemName, int qty, int batchesTotal,
-                                        Instant at) {
+                                        LocalDate plannedStart, Instant at) {
         ProductionJob j = new ProductionJob();
         j.erpOrderNo = erpOrderNo;
         j.itemCode = itemCode;
         j.itemName = itemName;
         j.qty = qty;
         j.batchesTotal = batchesTotal;
+        j.plannedStart = plannedStart;
         j.status = Status.RECEIVED;
         j.createdAt = at;
         return j;
@@ -90,6 +96,11 @@ public class ProductionJob {
 
     /** 다음 배치를 연다. 진행 중이거나 요청 중인 배치가 있거나, 배치를 다 돌았으면 IllegalStateException. */
     public JobBatch openNextBatch(String worker, Instant at) {
+        return openNextBatch(worker, at, false);
+    }
+
+    /** outOfOrder: 계획 순서상 앞선 지시를 두고 작업자가 확인 후 먼저 시작했다 (기록으로 남긴다). */
+    public JobBatch openNextBatch(String worker, Instant at, boolean outOfOrder) {
         if (batches.stream().anyMatch(b -> b.getStatus() == JobBatch.Status.REQUESTED
                 || b.getStatus() == JobBatch.Status.RUNNING)) {
             throw new IllegalStateException("이 지시의 배치가 아직 진행 중입니다");
@@ -100,7 +111,8 @@ public class ProductionJob {
         int seq = batches.size() + 1;
         // 실패한 배치는 번호를 다시 쓰지 않는다 (기록이 남도록). 수량은 아직 끝나지 않은 순번 기준
         int qtySeq = batchesDone + 1;
-        JobBatch b = JobBatch.request(this, seq, String.format("%s-%02d", erpOrderNo, seq), qtyOfBatch(qtySeq), worker, at);
+        JobBatch b = JobBatch.request(this, seq, String.format("%s-%02d", erpOrderNo, seq), qtyOfBatch(qtySeq), worker, at,
+                outOfOrder);
         batches.add(b);
         status = Status.IN_PROGRESS;
         return b;
@@ -124,6 +136,7 @@ public class ProductionJob {
     public int getBatchesDone() { return batchesDone; }
     public int getProducedQty() { return producedQty; }
     public Status getStatus() { return status; }
+    public LocalDate getPlannedStart() { return plannedStart; }
     public Instant getCreatedAt() { return createdAt; }
     public Instant getCompletedAt() { return completedAt; }
     public List<JobBatch> getBatches() { return batches; }

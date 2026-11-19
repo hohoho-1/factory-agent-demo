@@ -58,10 +58,15 @@ public class JobBatch {
     @Column(name = "reported_at")
     private Instant reportedAt;
 
+    /** 계획 순서를 건너뛰고 작업자 확인 후 시작한 배치 */
+    @Column(name = "out_of_order", nullable = false)
+    private boolean outOfOrder;
+
     protected JobBatch() {
     }
 
-    static JobBatch request(ProductionJob job, int seq, String batchId, int qty, String worker, Instant at) {
+    static JobBatch request(ProductionJob job, int seq, String batchId, int qty, String worker, Instant at,
+                            boolean outOfOrder) {
         JobBatch b = new JobBatch();
         b.job = job;
         b.seq = seq;
@@ -70,6 +75,7 @@ public class JobBatch {
         b.status = Status.REQUESTED;
         b.requestedBy = worker;
         b.requestedAt = at;
+        b.outOfOrder = outOfOrder;
         return b;
     }
 
@@ -115,4 +121,5 @@ public class JobBatch {
     public Instant getRequestedAt() { return requestedAt; }
     public Instant getCompletedAt() { return completedAt; }
     public Instant getReportedAt() { return reportedAt; }
+    public boolean isOutOfOrder() { return outOfOrder; }
 }
