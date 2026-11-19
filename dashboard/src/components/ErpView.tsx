@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getJson, postJson } from '../api'
+import { SuperAgentPanel } from './SuperAgentPanel'
 
 /**
  * ERP · 경영 화면. 가상 ERP 서비스(:8090, /erp)를 읽는다. 현장 관제 화면(백엔드 :8080)과 시스템이 다르다:
@@ -285,6 +286,8 @@ export function ErpView() {
           <span className="muted">{summary ? `${summary.openPurchases}건` : ''}</span>
         </div>
       </section>
+
+      <SuperAgentPanel />
 
       {message && <p className="erp__message">{message}</p>}
 

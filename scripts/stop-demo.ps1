@@ -4,6 +4,7 @@ $patterns = @(
     "*backend-0.0.1-SNAPSHOT.jar*",
     "*agent.agent*",
     "*erp.app*",
+    "*superagent.app*",
     "*virtual_sensors.py*",
     "*plc.virtual_plc*",
     "*plc.edge_gateway*",

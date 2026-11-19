@@ -30,7 +30,7 @@ public class QualityErpReporter {
     private final RestClient erp;
 
     public QualityErpReporter(QualityAssessmentRepository repository,
-                              @Value("${app.erp.base-url:http://localhost:8090}") String baseUrl) {
+                              @Value("${app.erp.base-url:http://127.0.0.1:8090}") String baseUrl) {
         this.repository = repository;
         this.erp = RestClient.builder().baseUrl(baseUrl).build();
     }

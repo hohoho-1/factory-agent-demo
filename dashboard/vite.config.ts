@@ -9,7 +9,9 @@ export default defineConfig({
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: true },
       // 가상 ERP 는 별도 서비스(8090): 화면은 하나, 시스템은 둘
-      '/erp': { target: 'http://localhost:8090', changeOrigin: true },
+      '/erp': { target: 'http://127.0.0.1:8090', changeOrigin: true },
+      // SuperAgent(8095): 질문 하나에 수십 초 걸릴 수 있다
+      '/command': { target: 'http://127.0.0.1:8095', changeOrigin: true, timeout: 180_000, proxyTimeout: 180_000 },
     },
   },
 })

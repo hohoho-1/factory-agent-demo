@@ -28,7 +28,7 @@ public class ErpReporter {
     private final JobBatchRepository batches;
     private final RestClient erp;
 
-    public ErpReporter(JobBatchRepository batches, @Value("${app.erp.base-url:http://localhost:8090}") String baseUrl) {
+    public ErpReporter(JobBatchRepository batches, @Value("${app.erp.base-url:http://127.0.0.1:8090}") String baseUrl) {
         this.batches = batches;
         this.erp = RestClient.builder().baseUrl(baseUrl).build();
     }

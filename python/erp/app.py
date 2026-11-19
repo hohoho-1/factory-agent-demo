@@ -365,7 +365,7 @@ def _reschedule(c, production_id: int, today: date) -> None:
 
 # ------------------------------------------------------------------ MES 연계 (ISA-95 레벨 4 ↔ 3)
 
-MES_BASE_URL = os.environ.get("MES_BASE_URL", "http://localhost:8080")
+MES_BASE_URL = os.environ.get("MES_BASE_URL", "http://127.0.0.1:8080")
 
 
 @app.post("/erp/production-orders/{order_id}/release")
