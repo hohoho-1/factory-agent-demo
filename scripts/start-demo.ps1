@@ -73,6 +73,8 @@ if (-not $ready) {
 }
 
 Start-Window "demo: ai-agent" (Join-Path $root "python") "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m agent.agent"
+# Virtual ERP (ISA-95 level 4): its own small service on :8090, own 'erp' schema in the same PostgreSQL
+Start-Window "demo: erp" (Join-Path $root "python") "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m erp.app"
 if ($OpcUa) {
     $pyDir = Join-Path $root "python"
     Start-Window "demo: virtual-plc" $pyDir "`$env:PYTHONIOENCODING = 'utf-8'; & '$py' -m plc.virtual_plc"
@@ -85,7 +87,8 @@ if ($OpcUa) {
 Start-Window "demo: dashboard" $dashboard "node '$vite'"
 
 Write-Host ""
-Write-Host "Dashboard      : http://localhost:5173"
+Write-Host "Dashboard      : http://localhost:5173  (ERP screen: top tab)"
+Write-Host "Virtual ERP    : http://localhost:8090/erp/docs"
 Write-Host "Inject anomaly : powershell -File scripts\inject.ps1 mixer_vibration"
 if ($OpcUa) {
     Write-Host "Data source    : virtual PLC opc.tcp://localhost:4840/factory/line1/ -> edge gateway -> MQTT"

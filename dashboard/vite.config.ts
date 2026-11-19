@@ -8,6 +8,8 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      // 가상 ERP 는 별도 서비스(8090): 화면은 하나, 시스템은 둘
+      '/erp': { target: 'http://localhost:8090', changeOrigin: true },
     },
   },
 })

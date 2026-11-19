@@ -7,6 +7,7 @@ import { AlarmPanel } from './components/AlarmPanel'
 import { AlarmTable } from './components/AlarmTable'
 import { BatchRecords } from './components/BatchRecords'
 import { EquipmentCard } from './components/EquipmentCard'
+import { ErpView } from './components/ErpView'
 import { HandoverModal } from './components/HandoverModal'
 import { SetpointHistory } from './components/SetpointHistory'
 import { WorkOrderModal } from './components/WorkOrderModal'
@@ -58,6 +59,12 @@ export default function App() {
   const [openWoId, setOpenWoId] = useState<number | null>(null)
   const openWo = live.workOrders.find((w) => w.id === openWoId) ?? null
   const setOpenWo = (wo: WorkOrder) => setOpenWoId(wo.id)
+  // 현장 관제(백엔드 · MES 역할) / ERP · 경영(가상 ERP 서비스). 주소의 #erp 로 기억한다
+  const [view, setView] = useState<'plant' | 'erp'>(() => (window.location.hash === '#erp' ? 'erp' : 'plant'))
+  useEffect(() => {
+    const target = view === 'erp' ? '#erp' : ''
+    if (window.location.hash !== target) history.replaceState(null, '', target || window.location.pathname)
+  }, [view])
   const [handoverOpen, setHandoverOpen] = useState(false)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [assistantId, setAssistantId] = useState<number | null>(null)
@@ -97,9 +104,21 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div>
-          <h1>Line 1 실시간 관제</h1>
-          <p className="muted">KMPC 스타일 미니 라인 · 원료 탱크 2 · 배합기 1 · 충진기 1</p>
+          <h1>{view === 'erp' ? 'ERP · 경영' : 'Line 1 실시간 관제'}</h1>
+          <p className="muted">
+            {view === 'erp'
+              ? '가상 ERP · 캡슐 세제 주문 · 생산 계획 · 구매 · 재고 · 원가'
+              : 'KMPC 스타일 미니 라인 · 원료 탱크 2 · 배합기 1 · 충진기 1'}
+          </p>
         </div>
+        <nav className="view-switch" aria-label="화면 전환">
+          <button className={view === 'plant' ? 'is-active' : ''} onClick={() => setView('plant')}>
+            현장 관제
+          </button>
+          <button className={view === 'erp' ? 'is-active' : ''} onClick={() => setView('erp')}>
+            ERP · 경영
+          </button>
+        </nav>
         <div className="topbar__right">
           <div className="kpi">
             <span className="kpi__label">위험</span>
@@ -128,6 +147,9 @@ export default function App() {
 
       {live.error && <div className="error">백엔드에 연결하지 못했습니다: {live.error}</div>}
 
+      {view === 'erp' ? (
+        <ErpView />
+      ) : (
       <main className="layout">
         <div className="equipment-grid">
           {EQUIPMENT.map((eq) => (
@@ -181,6 +203,7 @@ export default function App() {
           <AlarmTable alarms={live.alarms} now={now} />
         </div>
       </main>
+      )}
 
       {openWo && (
         <WorkOrderModal

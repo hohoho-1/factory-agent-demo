@@ -2,3 +2,6 @@ paho-mqtt==2.1.0
 scikit-learn==1.7.2
 anthropic==1.15.0
 asyncua==2.1.0
+fastapi==0.165.0
+uvicorn==0.54.0
+psycopg[binary]==3.3.9

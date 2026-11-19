@@ -1367,3 +1367,168 @@ p {
   font-size: 12px;
   padding: 4px 10px;
 }
+
+/* ---- 화면 전환 (현장 관제 / ERP · 경영) ---- */
+.view-switch {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  background: var(--surface);
+}
+
+.view-switch button {
+  font: inherit;
+  font-size: 13px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.view-switch button.is-active {
+  background: var(--series-1);
+  color: #fff;
+  font-weight: 600;
+}
+
+.view-switch button:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+
+/* ---- ERP · 경영 ---- */
+.erp {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.erp__kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+.erp__kpi {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.erp__kpi b {
+  font-size: 22px;
+  font-variant-numeric: tabular-nums;
+}
+
+.erp__kpi--risk {
+  border-color: color-mix(in srgb, var(--status-critical) 50%, transparent);
+  background: color-mix(in srgb, var(--status-critical) 6%, transparent);
+}
+
+.erp__kpi--risk b {
+  color: var(--status-critical);
+}
+
+.erp__message {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--series-1) 8%, transparent);
+  font-size: 13px;
+}
+
+.erp__form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.erp__form input,
+.erp__form select {
+  font: inherit;
+  font-size: 13px;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--axis);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.erp__form input#erp-customer {
+  flex: 1 1 180px;
+}
+
+.erp__form input#erp-qty {
+  width: 110px;
+}
+
+.erp__row--risk td {
+  background: color-mix(in srgb, var(--status-critical) 5%, transparent);
+}
+
+.erp__risk {
+  color: var(--status-critical);
+  font-size: 12px;
+  white-space: normal;
+}
+
+.erp__wrap {
+  white-space: normal;
+  min-width: 160px;
+}
+
+.erp__hint {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.erp__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 520px) {
+  .erp__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.erp__costs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.erp__cost h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.erp__cost-total {
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.erp__cost ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.erp__foot {
+  font-size: 12px;
+}
