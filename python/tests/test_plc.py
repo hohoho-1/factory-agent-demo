@@ -89,6 +89,25 @@ class BatchSequenceTest(unittest.TestCase):
         p.inject("batch_start")
         self.assertEqual(p.batch.batch_id, first)
 
+    def test_mes_request_sets_batch_id_and_recipe(self):
+        p = LineProcess()
+        self.assertEqual(p.request_batch("PRD-0002-01|캡슐 세제 B 15개입"), "PRD-0002-01")
+        self.assertEqual(p.states()["MIXER-01"]["recipe"], "캡슐 세제 B 15개입")
+        with self.assertRaises(InterlockError) as busy:
+            p.request_batch("PRD-0002-02|캡슐 세제 B 15개입")
+        self.assertEqual(busy.exception.code, "BadInvalidState")
+        with self.assertRaises(InterlockError):
+            LineProcess().request_batch("번호만")
+
+    def test_manual_batch_ids_do_not_repeat_after_restart(self):
+        # PLC 를 다시 켜도(카운터 초기화) 시각이 들어가 같은 날 번호가 겹치지 않는다
+        from datetime import datetime
+        a, b = LineProcess(), LineProcess()
+        a.batch.start(now=datetime(2026, 11, 19, 9, 0, 0))
+        b.batch.start(now=datetime(2026, 11, 19, 12, 19, 9))
+        self.assertNotEqual(a.batch.batch_id, b.batch.batch_id)
+        self.assertEqual(b.batch.batch_id, "B-1119-121909")
+
     def test_underheat_lowers_emulsifying_temperature(self):
         p = LineProcess()
         p.inject("batch_start")
@@ -102,8 +121,12 @@ class BatchSequenceTest(unittest.TestCase):
 class GatewayMessageTest(unittest.TestCase):
     def test_parse_command(self):
         cmd = parse_command(json.dumps({"requestId": 3, "equipmentId": "MIXER-01", "tag": "speed_sp",
-                                        "value": "50"}).encode())
+                                        "value": 50}).encode())
         self.assertEqual(cmd["value"], 50.0)
+        # MES 명령 태그 값은 문자열 그대로
+        cmd = parse_command(json.dumps({"requestId": 4, "equipmentId": "MIXER-01", "tag": "batchRequest",
+                                        "value": "PRD-0001-01|캡슐 세제 A"}).encode())
+        self.assertEqual(cmd["value"], "PRD-0001-01|캡슐 세제 A")
         with self.assertRaises(ValueError):
             parse_command(b'{"equipmentId": "MIXER-01"}')
 
@@ -152,6 +175,28 @@ class OpcUaRoundTripTest(unittest.IsolatedAsyncioTestCase):
 
             not_sp = await write_setpoint(mixer, {"equipmentId": "MIXER-01", "tag": "vibration", "value": 1.0})
             self.assertEqual(not_sp["code"], "BadNotWritable")
+
+    async def test_mes_batch_request_and_interlock(self):
+        async with Client(self.URL) as client:
+            mixer = (await browse_line(client))["MIXER-01"]
+            self.assertEqual(mixer.tags["batchRequest"].role, "CMD")
+            # 명령 태그는 텔레메트리에 올리지 않는다
+            self.assertNotIn("batchRequest", build_telemetry(mixer, {"vibration": 2.5}, None)["units"])
+
+            ok = await write_setpoint(mixer, {"requestId": 7, "equipmentId": "MIXER-01", "tag": "batchRequest",
+                                              "value": "PRD-0001-01|캡슐 세제 A 30개입"})
+            self.assertEqual(ok["status"], "APPLIED")
+            state = self.plc.process.states()["MIXER-01"]
+            self.assertEqual((state["batchId"], state["recipe"], state["batchPhase"]),
+                             ("PRD-0001-01", "캡슐 세제 A 30개입", "CHARGING"))
+
+            busy = await write_setpoint(mixer, {"requestId": 8, "equipmentId": "MIXER-01", "tag": "batchRequest",
+                                                "value": "PRD-0001-02|캡슐 세제 A 30개입"})
+            self.assertEqual((busy["status"], busy["code"]), ("INTERLOCKED", "BadInvalidState"))
+            self.assertIn("PRD-0001-01 진행 중", busy["message"])
+
+            wrong_type = await write_setpoint(mixer, {"equipmentId": "MIXER-01", "tag": "batchRequest", "value": 1.0})
+            self.assertEqual(wrong_type["code"], "BadNotWritable")
 
 
 if __name__ == "__main__":

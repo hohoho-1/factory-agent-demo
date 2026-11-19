@@ -67,6 +67,9 @@ PLC_RAMP_SCENARIOS = {
 
 BATCH_START = "batch_start"  # 현장 HMI 의 배치 시작 버튼 시뮬레이션 (이상 주입과 같은 MQTT 토픽으로 받는다)
 
+# MES 가 OPC UA 로 쓰는 배치 시작 요청 태그 (문자열 "배치번호|레시피"). 역할(Role) CMD
+BATCH_REQUEST_TAG = "batchRequest"
+
 
 @dataclass(frozen=True)
 class Phase:
@@ -95,17 +98,21 @@ class BatchSequencer:
         self.index = -1
         self.elapsed = 0
         self.batch_id = ""
-        self.counter = 0
+        self.recipe = ""
 
     @property
     def running(self) -> bool:
         return self.phase is not IDLE
 
-    def start(self, now: datetime | None = None) -> bool:
+    def start(self, now: datetime | None = None, batch_id: str | None = None, recipe: str | None = None) -> bool:
+        """
+        배치를 시작한다. MES 가 내려 준 배치 번호 · 레시피가 있으면 그대로 쓰고,
+        현장 HMI 버튼(시뮬레이션)이면 시각으로 번호를 만든다. PLC 를 다시 켜도 번호가 겹치지 않게 시 · 분 · 초까지 쓴다.
+        """
         if self.running:
             return False
-        self.counter += 1
-        self.batch_id = f"B-{(now or datetime.now()):%m%d}-{self.counter:02d}"
+        self.batch_id = batch_id or f"B-{(now or datetime.now()):%m%d-%H%M%S}"
+        self.recipe = recipe or RECIPE
         self.index, self.elapsed = 0, 0
         self.phase = BATCH_PHASES[0]
         return True
@@ -120,13 +127,13 @@ class BatchSequencer:
         self.elapsed = 0
         if self.index >= len(BATCH_PHASES):
             print(f"[BATCH] {self.batch_id} completed", flush=True)
-            self.phase, self.index, self.batch_id = IDLE, -1, ""
+            self.phase, self.index, self.batch_id, self.recipe = IDLE, -1, "", ""
         else:
             self.phase = BATCH_PHASES[self.index]
             print(f"[BATCH] {self.batch_id} -> {self.phase.code} ({self.phase.label})", flush=True)
 
     def state(self) -> dict[str, str]:
-        return {"batchPhase": self.phase.code, "batchId": self.batch_id, "recipe": RECIPE if self.running else ""}
+        return {"batchPhase": self.phase.code, "batchId": self.batch_id, "recipe": self.recipe if self.running else ""}
 
 
 class InterlockError(Exception):
@@ -192,6 +199,21 @@ class LineProcess:
         """현장 HMI 직접 입력 시뮬레이션 (시나리오용). 원격 쓰기가 아니라 인터록 검사를 거치지 않는다."""
         self.setpoints[(equipment_id, tag)] = float(value)
 
+    def request_batch(self, request: str) -> str:
+        """
+        MES 의 배치 시작 요청 ("배치번호|레시피"). 인터록: 배치가 돌고 있으면 거부(BadInvalidState),
+        형식이 틀리면 거부(BadOutOfRange). 시작하면 배치 번호를 돌려준다.
+        """
+        batch_id, _, recipe = request.partition("|")
+        batch_id, recipe = batch_id.strip(), recipe.strip()
+        if not batch_id or not recipe or len(batch_id) > 32:
+            raise InterlockError("BadOutOfRange", f"배치 요청 형식이 틀렸습니다 ('배치번호|레시피'): {request!r}")
+        if self.batch.running:
+            raise InterlockError("BadInvalidState", f"배치 {self.batch.batch_id} 진행 중이라 새 배치를 시작할 수 없습니다")
+        self.batch.start(batch_id=batch_id, recipe=recipe)
+        print(f"[BATCH] {batch_id} started by MES: {recipe}", flush=True)
+        return batch_id
+
     def states(self) -> dict[str, dict[str, str]]:
         """문자열 상태 태그 (설비별). 지금은 배합기의 배치 단계·배치 번호·레시피."""
         return {MIXER_ID: self.batch.state()}
@@ -200,7 +222,7 @@ class LineProcess:
         """이상 시나리오 시작 또는 배치 시작. 알 수 없는 이름이면 False."""
         if name == BATCH_START:
             if self.batch.start():
-                print(f"[BATCH] {self.batch.batch_id} started: {RECIPE}", flush=True)
+                print(f"[BATCH] {self.batch.batch_id} started: {self.batch.recipe}", flush=True)
             else:
                 print(f"[BATCH] skip start: {self.batch.batch_id} is still running", flush=True)
             return True

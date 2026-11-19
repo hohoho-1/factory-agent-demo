@@ -1,0 +1,57 @@
+package com.factoryagent.backend.mes;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
+
+/**
+ * MES 생산 지시 API.
+ * ERP: POST /api/mes/jobs 로 생산 오더를 내려보낸다.
+ * 대시보드: 목록을 보고, 작업자가 POST …/start-batch 로 다음 배치를 시작한다.
+ */
+@RestController
+public class MesController {
+
+    private final MesService service;
+
+    public MesController(MesService service) {
+        this.service = service;
+    }
+
+    public record StartRequest(String worker) {
+    }
+
+    @GetMapping("/api/mes/jobs")
+    public List<ProductionJob> jobs() {
+        return service.recent();
+    }
+
+    @PostMapping("/api/mes/jobs")
+    public ResponseEntity<ProductionJob> receive(@RequestBody MesService.JobRequest req) {
+        return ResponseEntity.status(HttpStatus.CREATED).body(service.receive(req));
+    }
+
+    @PostMapping("/api/mes/jobs/{id}/start-batch")
+    public JobBatch startBatch(@PathVariable Long id, @RequestBody(required = false) StartRequest req) {
+        String worker = req == null || req.worker() == null || req.worker().isBlank() ? "현장 작업자" : req.worker().trim();
+        return service.startNextBatch(id, worker);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> badRequest(IllegalArgumentException e) {
+        return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, String>> conflict(IllegalStateException e) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("message", e.getMessage()));
+    }
+}

@@ -1532,3 +1532,67 @@ p {
 .erp__foot {
   font-size: 12px;
 }
+
+/* ---- 생산 지시 (ERP → MES) ---- */
+.mes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.mes__job {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.mes__top {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.mes__progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--grid);
+  overflow: hidden;
+}
+
+.mes__progress span {
+  display: block;
+  height: 100%;
+  background: var(--status-good);
+}
+
+.mes__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.mes__batch--running,
+.mes__batch--requested {
+  color: var(--link);
+  font-weight: 600;
+}
+
+.mes__batch--failed {
+  color: var(--status-critical);
+}
+
+.mes__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}

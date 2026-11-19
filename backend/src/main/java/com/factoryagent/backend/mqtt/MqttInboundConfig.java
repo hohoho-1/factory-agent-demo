@@ -2,7 +2,9 @@ package com.factoryagent.backend.mqtt;
 
 import com.factoryagent.backend.control.CommandResult;
 import com.factoryagent.backend.control.SetpointService;
+import com.factoryagent.backend.mes.MesService;
 import com.factoryagent.backend.telemetry.TelemetryService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
 import org.slf4j.Logger;
@@ -59,6 +61,7 @@ public class MqttInboundConfig {
     @Bean
     public IntegrationFlow commandResultInboundFlow(MqttPahoClientFactory clientFactory,
                                                    SetpointService setpointService,
+                                                   MesService mesService,
                                                    ObjectMapper objectMapper,
                                                    @Value("${app.mqtt.client-id}") String clientId,
                                                    @Value("${app.mqtt.command-result-topic}") String topic) {
@@ -70,7 +73,14 @@ public class MqttInboundConfig {
         return IntegrationFlow.from(adapter)
                 .handle(String.class, (payload, headers) -> {
                     try {
-                        setpointService.onResult(objectMapper.readValue(payload, CommandResult.class));
+                        JsonNode node = objectMapper.readTree(payload);
+                        if (BatchRequestPublisher.TAG.equals(node.path("tag").asText())) {
+                            // MES 배치 시작 요청의 결과 (설정값이 아니라 명령 태그)
+                            mesService.onCommandResult(node.hasNonNull("requestId") ? node.get("requestId").asLong() : null,
+                                    node.path("status").asText(), node.path("message").asText(null));
+                            return null;
+                        }
+                        setpointService.onResult(objectMapper.treeToValue(node, CommandResult.class));
                     } catch (Exception e) {
                         log.warn("invalid command result: {} ({})", payload, e.getMessage());
                     }

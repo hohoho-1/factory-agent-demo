@@ -9,6 +9,7 @@ import { BatchRecords } from './components/BatchRecords'
 import { EquipmentCard } from './components/EquipmentCard'
 import { ErpView } from './components/ErpView'
 import { HandoverModal } from './components/HandoverModal'
+import { MesJobsPanel } from './components/MesJobsPanel'
 import { SetpointHistory } from './components/SetpointHistory'
 import { WorkOrderModal } from './components/WorkOrderModal'
 import { WorkOrderPanel } from './components/WorkOrderPanel'
@@ -172,6 +173,7 @@ export default function App() {
         {/* 오른쪽 열은 높이를 설비 카드 영역에 맞추고, 넘치는 지시서 목록은 패널 안에서 스크롤한다 */}
         <aside className="side">
           <div className="side__inner">
+            <MesJobsPanel mixerBatch={live.batchStates['MIXER-01']} />
             <AlarmPanel
               forecasts={live.forecasts}
               alarms={live.alarms}

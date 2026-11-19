@@ -6,6 +6,7 @@
                  {"equipmentId","type","ts","metrics":{...},"units":{...}}   (가상 센서와 같은 형식)
                  문자열 상태 태그(배치 단계 등)가 있으면 "state":{"batchPhase","batchId","recipe"} 를 더한다
   MQTT → OPC UA  factory/line1/commands          {"requestId","equipmentId","tag","value"}
+                 value 는 설정값(SP)이면 숫자, MES 명령 태그(CMD, 예: batchRequest "배치번호|레시피")면 문자열
   결과 보고      factory/line1/commands/results  {"requestId","equipmentId","tag","requested","status",
                                                    "code","message","before","after","ts"}
                  status: APPLIED(반영) / INTERLOCKED(PLC 인터록 거부) / FAILED(통신 오류 등)
@@ -43,7 +44,7 @@ class Tag:
     equipment_id: str
     name: str
     unit: str
-    role: str  # PV / SP / STATE(문자열 상태)
+    role: str  # PV / SP / STATE(문자열 상태) / CMD(MES 명령, 문자열 쓰기 전용)
     node: Node
 
 
@@ -70,13 +71,15 @@ def parse_command(payload: bytes) -> dict:
     for key in ("equipmentId", "tag", "value"):
         if cmd.get(key) is None:
             raise ValueError(f"missing '{key}'")
-    cmd["value"] = float(cmd["value"])
+    # 숫자면 설정값, 문자열이면 명령 태그 값 (어느 태그인지는 쓸 때 PLC 주소 공간의 Role 로 확인한다)
+    if not isinstance(cmd["value"], str):
+        cmd["value"] = float(cmd["value"])
     return cmd
 
 
 def build_telemetry(eq: Equipment, values: dict, ts: datetime | None) -> dict:
     """숫자 태그(PV·SP)는 metrics, 문자열 상태 태그(STATE: 배치 단계 등)는 state 로 나눠 담는다."""
-    numeric = {name: tag for name, tag in eq.tags.items() if tag.role != "STATE"}
+    numeric = {name: tag for name, tag in eq.tags.items() if tag.role in ("PV", "SP")}
     payload = {
         "equipmentId": eq.equipment_id,
         "type": eq.type,
@@ -141,11 +144,18 @@ async def write_setpoint(eq: Equipment | None, cmd: dict) -> dict:
         "message": "",
     }
     tag = eq.tags.get(cmd["tag"]) if eq else None
-    if tag is None or tag.role != "SP":
+    is_cmd = tag is not None and tag.role == "CMD"
+    if tag is None or tag.role not in ("SP", "CMD") or is_cmd != isinstance(cmd["value"], str):
         result.update(status="INTERLOCKED", code="BadNotWritable",
-                      message=f"{cmd['equipmentId']}.{cmd['tag']} 는 쓰기 가능한 설정값 태그가 아닙니다")
+                      message=f"{cmd['equipmentId']}.{cmd['tag']} 는 이 값으로 쓸 수 있는 태그가 아닙니다")
         return _stamp(result)
     try:
+        if is_cmd:
+            # 명령 태그: 문자열을 쓰면 PLC 가 실행한다 (전후 값 대신 결과만)
+            await tag.node.write_value(ua.DataValue(ua.Variant(cmd["value"], ua.VariantType.String)))
+            result["status"] = "APPLIED"
+            result["message"] = "PLC 명령 실행"
+            return _stamp(result)
         result["before"] = await tag.node.read_value()
         await tag.node.write_value(ua.DataValue(ua.Variant(cmd["value"], ua.VariantType.Double)))
         result["after"] = await tag.node.read_value()
@@ -153,7 +163,7 @@ async def write_setpoint(eq: Equipment | None, cmd: dict) -> dict:
         result["message"] = "PLC 설정값 반영"
     except ua.UaStatusCodeError as e:
         result["code"] = ua.StatusCode(e.code).name
-        result["after"] = await tag.node.read_value()
+        result["after"] = None if is_cmd else await tag.node.read_value()
         reason = ""
         if eq.interlock is not None:
             await asyncio.sleep(0.05)  # PLC 가 사유 태그를 쓰는 동안 잠깐 기다린다
@@ -214,7 +224,8 @@ class EdgeGateway:
     async def _session(self) -> None:
         async with Client(self.url, timeout=5) as client:
             equipment = await browse_line(client)
-            by_node = {t.node.nodeid: t for eq in equipment.values() for t in eq.tags.values()}
+            # 명령 태그(CMD)는 쓰기 전용이라 구독하지 않는다
+            by_node = {t.node.nodeid: t for eq in equipment.values() for t in eq.tags.values() if t.role != "CMD"}
             collector = _Collector(by_node)
             sub = await client.create_subscription(int(self.interval * 500), collector)
             await sub.subscribe_data_change([t.node for t in by_node.values()])

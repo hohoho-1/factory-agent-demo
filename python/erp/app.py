@@ -9,11 +9,16 @@
 - 판매 주문 등록 → 생산 계획: 자재 소요량 · 재고 할당 · 부족분 구매 발주 · 일정 · 납기 리스크
 - 구매 입고 → 재고 반영, 그 자재를 기다리던 생산 오더의 일정 다시 계산
 - 경영 요약 (미결 주문, 납기 위험, 재고 금액, 발주 금액)
-MES(백엔드)와의 연계(생산 오더 → 작업 지시 → 배치 실적)는 다음 단계에서 붙인다.
+- MES 연계: 생산 오더를 현장에 지시(POST 백엔드 /api/mes/jobs) → MES 가 배치마다 실적을 올리면
+  원료 · 포장재를 BOM 표준량으로 출고(백플러시)하고 완제품을 입고한다.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+import json
+import os
+import urllib.error
+import urllib.request
+from datetime import date, datetime, timedelta
 
 import psycopg
 import uvicorn
@@ -128,6 +133,7 @@ def production_orders() -> list[dict]:
                  "materialReady": p["material_ready"], "plannedStart": p["planned_start"],
                  "plannedEnd": p["planned_end"], "dueDate": p["due_date"], "atRisk": p["at_risk"],
                  "riskReason": p["risk_reason"], "plannedCost": p["planned_cost"], "status": p["status"],
+                 "producedQty": p["produced_qty"], "batchesDone": p["batches_done"],
                  "materials": by_order.get(p["id"], [])} for p in orders]
 
 
@@ -289,6 +295,94 @@ def _reschedule(c, production_id: int, today: date) -> None:
     c.execute("UPDATE erp.production_order SET material_ready = %s, planned_start = %s, planned_end = %s,"
               " at_risk = %s, risk_reason = %s WHERE id = %s",
               (material_ready, start, end, at_risk, reason, production_id))
+
+
+# ------------------------------------------------------------------ MES 연계 (ISA-95 레벨 4 ↔ 3)
+
+MES_BASE_URL = os.environ.get("MES_BASE_URL", "http://localhost:8080")
+
+
+@app.post("/erp/production-orders/{order_id}/release")
+def release_to_mes(order_id: int) -> dict:
+    """
+    생산 오더를 현장(MES)에 지시한다. 자재가 다 할당된 오더만 내려보낸다 (모자라면 입고 뒤에).
+    MES 가 받으면 RELEASED. MES 가 꺼져 있으면 502 이고 오더는 그대로 계획 상태로 남는다.
+    """
+    with conn() as c:
+        p = c.execute("SELECT p.*, i.name AS item_name FROM erp.production_order p JOIN erp.item i ON i.code = p.item_code"
+                      " WHERE p.id = %s FOR UPDATE OF p", (order_id,)).fetchone()
+        if p is None:
+            raise HTTPException(404, f"생산 오더 #{order_id} 가 없습니다")
+        if p["status"] != "PLANNED":
+            raise HTTPException(409, f"이미 현장에 지시한 오더입니다 ({p['status']})")
+        short = c.execute("SELECT item_code FROM erp.production_material WHERE production_order_id = %s AND shortage > 0",
+                          (order_id,)).fetchall()
+        if short:
+            raise HTTPException(409, "자재가 모자라 지시할 수 없습니다 (입고 뒤에 지시): "
+                                     + ", ".join(r["item_code"] for r in short))
+        payload = {"erpOrderNo": p["order_no"], "itemCode": p["item_code"], "itemName": p["item_name"],
+                   "qty": p["qty"], "batches": p["batches"]}
+        try:
+            req = urllib.request.Request(f"{MES_BASE_URL}/api/mes/jobs", method="POST",
+                                         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                                         headers={"Content-Type": "application/json; charset=utf-8"})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                job = json.load(r)
+        except (urllib.error.URLError, ValueError) as e:
+            raise HTTPException(502, f"MES(현장 시스템)에 지시하지 못했습니다: {e}") from e
+        c.execute("UPDATE erp.production_order SET status = 'RELEASED' WHERE id = %s", (order_id,))
+        if p["sales_order_id"]:
+            c.execute("UPDATE erp.sales_order SET status = 'IN_PRODUCTION' WHERE id = %s", (p["sales_order_id"],))
+        c.commit()
+    return {"productionOrder": next(x for x in production_orders() if x["id"] == order_id), "mesJobId": job.get("id")}
+
+
+class ActualRequest(BaseModel):
+    batchId: str = Field(min_length=1, max_length=32)
+    seq: int = Field(ge=1)
+    qty: int = Field(gt=0)
+    completedAt: datetime | None = None
+
+
+@app.post("/erp/production-orders/{order_no}/actuals")
+def receive_actual(order_no: str, req: ActualRequest) -> dict:
+    """
+    MES 가 올린 배치 1개의 생산 실적. 원료 · 포장재는 BOM 표준량으로 출고(백플러시)하고 완제품을 입고한다.
+    같은 배치 번호가 다시 오면 아무것도 하지 않는다 (MES 가 다시 보내도 재고가 두 번 빠지지 않게).
+    """
+    with conn() as c:
+        p = c.execute("SELECT * FROM erp.production_order WHERE order_no = %s FOR UPDATE", (order_no,)).fetchone()
+        if p is None:
+            raise HTTPException(404, f"생산 오더 {order_no} 가 없습니다")
+        if c.execute("SELECT 1 FROM erp.production_actual WHERE batch_id = %s", (req.batchId,)).fetchone():
+            return {"duplicate": True, "batchId": req.batchId}
+        c.execute("INSERT INTO erp.production_actual (batch_id, production_order_id, seq, qty, completed_at)"
+                  " VALUES (%s, %s, %s, %s, %s)", (req.batchId, p["id"], req.seq, req.qty, req.completedAt))
+        for code, used in planning.requirements(p["item_code"], req.qty).items():
+            # 이 오더에 할당해 둔 수량에서 먼저 빼고, 현재고에서 출고한다
+            m = c.execute("SELECT allocated FROM erp.production_material WHERE production_order_id = %s"
+                          " AND item_code = %s", (p["id"], code)).fetchone()
+            release = min(used, num(m["allocated"])) if m else 0.0
+            if m:
+                c.execute("UPDATE erp.production_material SET allocated = allocated - %s"
+                          " WHERE production_order_id = %s AND item_code = %s", (release, p["id"], code))
+            c.execute("UPDATE erp.inventory SET on_hand = on_hand - %s, allocated = allocated - %s WHERE item_code = %s",
+                      (used, release, code))
+            c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'ISSUE', %s, %s)",
+                      (code, used, req.batchId))
+        c.execute("UPDATE erp.inventory SET on_hand = on_hand + %s WHERE item_code = %s", (req.qty, p["item_code"]))
+        c.execute("INSERT INTO erp.inventory_txn (item_code, kind, qty, ref) VALUES (%s, 'RECEIPT', %s, %s)",
+                  (p["item_code"], req.qty, req.batchId))
+        produced = p["produced_qty"] + req.qty
+        status = "COMPLETED" if produced >= p["qty"] else "IN_PROGRESS"
+        c.execute("UPDATE erp.production_order SET produced_qty = %s, batches_done = batches_done + 1, status = %s"
+                  " WHERE id = %s", (produced, status, p["id"]))
+        if p["sales_order_id"]:
+            c.execute("UPDATE erp.sales_order SET status = %s WHERE id = %s",
+                      ("COMPLETED" if status == "COMPLETED" else "IN_PRODUCTION", p["sales_order_id"]))
+        c.commit()
+    print(f"[ERP] actual {req.batchId}: {order_no} +{req.qty} ({produced}/{p['qty']}, {status})", flush=True)
+    return {"duplicate": False, "batchId": req.batchId, "producedQty": produced, "status": status}
 
 
 @app.post("/erp/reset")

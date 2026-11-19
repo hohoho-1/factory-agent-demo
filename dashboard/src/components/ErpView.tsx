@@ -3,7 +3,7 @@ import { getJson, postJson } from '../api'
 
 /**
  * ERP · 경영 화면. 가상 ERP 서비스(:8090, /erp)를 읽는다. 현장 관제 화면(백엔드 :8080)과 시스템이 다르다:
- * 화면은 하나, 시스템은 둘. 생산 오더 → MES 작업 지시 연계는 다음 단계에서 붙는다.
+ * 화면은 하나, 시스템은 둘. 생산 오더는 '현장 지시'로 MES 에 내려가고, 배치 실적이 올라오면 재고가 바뀐다.
  */
 
 interface Summary {
@@ -55,8 +55,18 @@ interface ProductionOrder {
   atRisk: boolean
   riskReason: string | null
   plannedCost: number
-  status: string
+  status: 'PLANNED' | 'RELEASED' | 'IN_PROGRESS' | 'COMPLETED' | 'ON_HOLD'
+  producedQty: number
+  batchesDone: number
   materials: Material[]
+}
+
+const PO_STATUS: Record<ProductionOrder['status'], string> = {
+  PLANNED: '계획',
+  RELEASED: '현장 지시됨',
+  IN_PROGRESS: '생산 중',
+  COMPLETED: '생산 완료',
+  ON_HOLD: '보류',
 }
 
 interface PurchaseOrder {
@@ -151,8 +161,11 @@ export function ErpView() {
     }
   }, [])
 
+  // MES 가 배치 실적을 올리면 재고 · 진행률이 바뀌므로 주기적으로 다시 읽는다
   useEffect(() => {
     void load()
+    const id = window.setInterval(() => void load(), 5000)
+    return () => window.clearInterval(id)
   }, [load])
 
   const act = async (label: string, fn: () => Promise<string>) => {
@@ -199,6 +212,12 @@ export function ErpView() {
     act('입고', async () => {
       const r = await postJson<{ rescheduled: number[] }>(`/erp/purchase-orders/${po.id}/receive`, {})
       return `${po.orderNo} 입고: ${po.itemName} ${qty(po.qty)}${po.uom}` + (r.rescheduled.length ? ' · 생산 일정 다시 계산' : '')
+    })
+
+  const release = (p: ProductionOrder) =>
+    act('현장 지시', async () => {
+      await postJson(`/erp/production-orders/${p.id}/release`, {})
+      return `${p.orderNo}를 현장(MES)에 지시했습니다. 현장 관제 화면의 '생산 지시'에서 배치를 시작하세요`
     })
 
   const reset = () =>
@@ -336,7 +355,7 @@ export function ErpView() {
         <header className="panel__head">
           <h2>생산 오더</h2>
           <span className="count">{production.length}</span>
-          <span className="muted erp__hint">다음 단계: 생산 오더 → MES 작업 지시 → 배치 실적</span>
+          <span className="muted erp__hint">현장 지시 → MES 배치 → 배치마다 실적 · 원료 출고 · 완제품 입고</span>
         </header>
         {production.length === 0 ? (
           <p className="empty">판매 주문에서 "생산 계획"을 누르면 생산 오더가 생깁니다.</p>
@@ -355,6 +374,7 @@ export function ErpView() {
                   <th>납기</th>
                   <th className="num">계획 원가</th>
                   <th>부족 자재</th>
+                  <th>상태 · 실적</th>
                 </tr>
               </thead>
               <tbody>
@@ -376,6 +396,26 @@ export function ErpView() {
                       <td className="num">{won(p.plannedCost)}</td>
                       <td className="erp__wrap">
                         {short.length ? short.map((m) => `${m.itemCode} ${qty(m.shortage)}`).join(', ') : '없음'}
+                      </td>
+                      <td>
+                        {PO_STATUS[p.status]}
+                        {p.status !== 'PLANNED' && (
+                          <div className="muted">
+                            배치 {p.batchesDone}/{p.batches} · {qty(p.producedQty)}파우치
+                          </div>
+                        )}
+                        {p.status === 'PLANNED' && (
+                          <div>
+                            <button
+                              className="button button--ghost"
+                              disabled={busy || short.length > 0}
+                              title={short.length ? '부족 자재가 입고된 뒤 지시할 수 있습니다' : undefined}
+                              onClick={() => void release(p)}
+                            >
+                              현장 지시
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )
